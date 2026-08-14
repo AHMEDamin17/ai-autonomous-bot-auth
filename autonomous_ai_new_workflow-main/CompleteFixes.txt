@@ -1,0 +1,770 @@
+# Comprehensive Master Changelog (v1 to v9)
+This document aggregates all fixes, architectural changes, and optimizations applied to the Semantic Layer Analytics AI, spanning from the initial v1 codebase up to the v9 Query-Pipeline Reliability & Theme Compliance release.
+
+---
+
+## Part 1: V1 Core Refactoring & Autonomous AI Consolidation
+*These fixes stabilized the initial query routing architecture, consolidated the AI logic into a single Autonomous AI pipeline, and fixed multiple edge cases in the LLM planner.*
+
+### 1. Verification & Bug Fixes
+- **SIMPLE fallback → UNKNOWN**: Added `UNKNOWN` mode classification. Queries that don't match any catalog objects now gracefully return a guided error instead of entering endless LLM loops or throwing "KPI Required".
+- **AMBIGUOUS column mapping**: Fixed missing `column` field in the AMBIGUOUS response payload so the UI properly displays the conflicted column name.
+- **Frontend Mode Badges**: Styled the `direct_select` and `autonomous-ai` badges uniformly across the UI sidebar and results cards.
+- **GREETING mode alignment**: Ensured `"CONVERSATIONAL"` was fully mapped to `"GREETING"` across both the classifier and UI renderer.
+- **Simple Query Resolution**: Bypassed strict SIMPLE mode routing when queries contain aggregations (e.g. "sum of"), sending them to the AI planner (`COMPLEX` mode) instead of crashing the direct select pipeline.
+- **Multi-Agent Recursion Limit (AI Planning Error)**: Loosened semantic validation string matching (`getDynamicColumn`). The LLM planner can now slightly misspell columns (e.g. `"Samount"` instead of `"S_amount"`) and the backend will autocorrect it, preventing 8-loop recursion crashes.
+
+### 2. "Autonomous AI" Architecture Consolidation
+- **Removed Legacy Pipelines**: Deleted `kpiPipeline.ts` and `directSelectPipeline.ts`.
+- **Unified Entry Point**: Renamed `deepAgentWorkflow.ts` to `autonomousAi.ts` and funneled all valid queries through `runAutonomousAi`.
+- **UI Simplification**: Removed the manual "mode selector" dropdown in the frontend. The UI now fully operates in `autonomous-ai` mode implicitly.
+
+---
+
+## Part 2: V2 Security, Frontend, and Resilience Updates
+*This phase introduced essential security patches, telemetry concurrency fixes, and Tailwind CSS v4 frontend compatibility.*
+
+### 1. Security & Dependencies
+- **Updated `mysql2`**: Patched RCE vulnerabilities.
+- **API Authentication Middleware**: Secured all `/api` routes via `mcp/security/authMiddleware.ts` requiring `process.env.API_KEY`.
+- **Secured SQL KPI Formulas**: Hardened `sqlValidator.ts` to prohibit injection vectors (`UNION`, `SLEEP()`, subqueries) in KPI logic.
+- **LLM Prompt Injection**: Encapsulated user queries within `<user_query>` XML tags in the LLM system prompt.
+
+### 2. Resilience & Race Conditions
+- **Circuit Breaker Deadlock**: Added 30s timeouts to Lua scripts to recover stuck half-open states in Redis.
+- **Telemetry Cache Race Condition**: Rewrote `saveLogsToCacheAsync` in `telemetry/inMemoryLogs.ts` using async locks to prevent overlapping JSON write corruption.
+- **Memory Leak in Conversations**: Stripped massive data rows from `msg.queryResult.data.rows` before saving conversation history to memory.
+
+### 3. Frontend Fixes
+- Fixed arbitrary CSS variables by replacing `-([color])/40` with valid `color-mix` functions for Tailwind v4 compatibility.
+- Fixed `lazyWithRetry` React router loader to forcibly reload `sessionStorage` on chunk load errors.
+- Applied API key headers (`VITE_API_KEY`) globally across Axios interceptors.
+
+---
+
+## Part 3: V3 Token Reduction & UI Overhaul
+*This phase overhauled the context builder to send strictly pruned data to the LLM, reducing token waste, and completely rebuilt the KPI filter/join UI.*
+
+### Sprint 1: Backend Routing & Context Foundation
+- Created `stringNormalizer.ts` utility.
+- Updated `AnalyticsQuerySchema` in `query.ts` to accept `mode` and `forcedTableContext`.
+- Built `buildSimpleContext()` in `contextBuilder.ts` to heavily prune the schema sent to the LLM based on user prompt tokens.
+- Built `extractKpiTables()` logic.
+- Updated the LLM Planner system prompt to accommodate pruned contexts.
+
+### Sprint 2: Frontend Analytics AI Tab Overhaul
+- Added Segmented Toggle UI for AI context modes.
+- Updated API service and `handleAskPrompt` with new `forcedTableContext` resolution capabilities.
+- Overhauled the AMBIGUOUS response block UI with clickable table resolution cards.
+
+### Sprint 3: KPI Builder - Filter Logic UI/UX Overhaul
+- Deleted old recursive tree logic.
+- Built the new recursive `<FilterGroupCard />` component mapping to an AST representation.
+- Implemented Match ALL / ANY toggles.
+- Built `buildFilterSummary()` text generator.
+
+### Sprint 4: KPI Builder - Rooted Join Tree UI/UX Overhaul
+- Added `<MainTableSelector />` to lock the primary analysis table.
+- Locked first join `leftTable` to `MainTable` to strictly enforce a tree topology.
+- Restricted `rightTable` options to definitively prevent cyclical joins.
+
+---
+
+## Part 4: V4 Backend Hardening & Data Integrity
+*This final phase fixed critical data leaks, timeout starvation, and execution crashing vectors.*
+
+### Sprint 5: Backend Compiler Validation & Hardening
+- Updated `autoGenerateJoins` to BFS.
+- Added AMBIGUOUS resolution fallback for prefix-less formula columns.
+- Added Zod validation error for incomplete join paths.
+
+### Sprint 6: Backend Hardening (Core Config & Formatting)
+- **Unified Limits**: Ensured `MAX_QUERY_LIMIT` is strictly derived from the environment variable across the planner, compiler, and validator.
+- **Plural Stripping**: Removed destructive crude plural stripping from `stringNormalizer.ts` which was corrupting ambiguous token resolution (e.g. `status` -> `statu`).
+- **Formatting**: Fixed double-escaping (`\n\n`) in user-facing LLM error messages.
+- **Validation Operator Precedence**: Fixed `c.name === col || c.name === col.split(".").pop()` evaluation in `kpiMetrics.ts` so dimensions and filters are strictly validated against catalog columns.
+
+### Sprint 7: Backend Hardening (Performance & Safety)
+- **Awaited Circuit Breakers**: Wrapped `breaker.recordSuccess/Failure` and `getState` in try/catch and awaited the Redis calls, preventing silent unhandled promise rejections.
+- **Fail-Fast Secrets**: Enforced a module-load failure if `CONNECTION_SECRET_KEY` or `API_KEY` are missing in production.
+- **Result Cache Optimization**: Refactored `resultCache.invalidateConnection` to use a non-blocking `redis.scan` by `connectionId` prefix rather than `O(N)` `KEYS rc:*`.
+- **Global Adapter Timeouts**: Wrapped every database adapter execution (Postgres, MSSQL, Databricks, BigQuery, Snowflake, SQLite) in a strict 30,000ms `withTimeout` wrapper.
+- **In-Memory LRU**: Enforced strict size limits and Least-Recently-Used eviction on the fallback memory `resultCache`.
+
+### Sprint 8: Backend Hardening (Adapters & Legacy)
+- **Database Connection Pools**: Eliminated SQLite, Snowflake, and BigQuery connection leaks by hooking them into the unified `setAdapterPool/getAdapterPool` lifecycle.
+- **SQL Server Foreign Keys**: Fixed broken multi-column FK queries by migrating from `INFORMATION_SCHEMA` to strict `sys.foreign_key_columns` mappings.
+- **Legacy KPI Guardrails**: Evaluated legacy KPIs containing string-based `inclusions/exclusions` and properly flagged them with `needsMigration: true` preventing backend crashes.
+- **Automated Telemetry Cleanup**: Deployed `cleanupOldTelemetry` in `main.ts` on a 24-hour interval to delete logs and latency samples older than 7 days to prevent database bloating.
+
+---
+
+## Part 5: V5 Master Bug Fixes & Refinement
+*This phase systematically resolved the final 78 outstanding bugs listed in Frontendproblems.txt across security, LLM planner routing, compiler generation, telemetry bottlenecks, and database adapters.*
+
+### 1. Security & Routing
+* **API Key Headers & Hardcoded Secrets**: Modified `authMiddleware.ts` to strictly require `x-api-key` headers (removing query parameter fallback) and changed the default API key to generate a secure random token on startup instead of using "default-dev-key".
+* **Missing Routes**: Implemented the missing `POST /conversations` endpoint in `router.ts` to wire up the conversation creation feature.
+* **Rate Limiting & Proxy Support**: Added `trust proxy` to the Express app configuration to ensure IP-based rate limiting functions correctly behind load balancers. Applied `apiLimiter` to exposed routes including `/api/observability/logs`, `/metrics`, `/circuit/:id`, and the SSE `/stream` endpoint.
+* **Payload DoS Protection**: Lowered the `express.json` and `express.urlencoded` body limits from a dangerously high 50MB down to 1MB to prevent memory exhaustion DoS attacks.
+
+### 2. System Orchestration & LLM Planner
+* **Model Routing**: Refactored `getLlmModel` to fix silent overrides, ensuring `gpt-*` models are correctly respected and `semantic-slm`/`verifier-slm` map to appropriate fast models (like `llama-3.1-8b-instant` or `gpt-4o-mini`).
+* **Error Propagation**: Fixed a severe bug where `AMBIGUOUS_KPI_MODE` was swallowed by LangGraph. The orchestrator now explicitly captures `fatalError` in its state and re-throws it so the UI's ambiguous fallback triggers correctly.
+* **Metric Leakage & Race Conditions**: Prevented dynamic-metric mutation leaks in `validatePlan.ts` so duplicate metrics don't pile up in the catalog. Fixed concurrent race conditions on metric auto-healing.
+* **Planner Schema Fixes**: Adjusted `QueryPlanSchema` to default to ascending (`asc`) sort directions for time-series queries. Prevented the `insightBuilder.ts` from hardcoding "monthly trend" suggestions when a dataset has no date column. Removed deep unions in `LaxQueryPlanSchema` to improve structured output reliability for Groq/Llama models.
+
+### 3. Compiler & KPI Logic
+* **List Queries**: Fixed list queries by falling back to selecting `kpiOptions.kpi.select_columns` (if present) or `*` rather than throwing an `EMPTY_SELECT` error when a query lacks an explicit metric.
+* **Update Validation**: Removed restrictive conditionals in `kpiMetrics.update` so that formulas, join specs, and logic rules are thoroughly validated on every update, even if only the name changed.
+* **Column Validation (`filter_logic`)**: Enforced strict `table.column` matching checks in `kpiMetrics.create` to stop cross-table column leaks during validation.
+* **Dead Code**: Removed the unused `extractInvolvedTables` and `validateFilterFragment` functions.
+* **Query Overrides**: Modified `compileKpiQuery` to correctly respect `queryGroupBy`, `querySortDir`, and `queryLimit` overrides from `kpiOptions`.
+* **SQL Server Generation**: Fixed the regex issue for SQL Server dialects by prepending `TOP N` directly during the initial `SELECT` builder phase rather than relying on a fragile regex substitution.
+* **Self-Test Harness**: Disabled the `compiler.ts` test infrastructure from running automatically in production unless explicitly invoked with the `--selftest` flag.
+
+### 4. Telemetry & Resilience
+* **Log Performance**: Replaced O(N) `unshift` operations in `inMemoryLogs.ts` with `push` and `slice` to operate like a ring buffer, drastically reducing CPU/GC overhead.
+* **IO Bottlenecks**: Increased the telemetry cache debounce timer from 1s to 5s to reduce filesystem pressure on heavy loads. Delayed the `cleanupOldTelemetry` chron by 5 minutes on startup to prevent lock contention.
+* **Circuit Breaker Skew**: Added a clock-skew safeguard to `circuitBreaker.ts` to prevent negative timestamps (from NTP syncs) from permanently breaking decay calculations.
+* **PostgreSQL Metadata UPSERT**: Verified that `telemetryStore.ts` uses a cross-database compatible UPSERT mechanism (trying `UPDATE` first and falling back to `INSERT`) rather than the MySQL-specific `ON DUPLICATE KEY UPDATE`.
+
+### 5. Database Adapters
+* **SSL Overrides**: Modified `buildLiveAdapter.ts` to extract `ssl` properties from the connection's `credentials_json`, allowing per-connection SSL behavior to override the global environment variables for Postgres and MySQL.
+* **MSSQL Encryption**: Removed the hardcoded `encrypt: false` for SQL Server connections. It now defaults to true (required for Azure SQL) and respects `encrypt` overrides passed via `credentials_json`.
+* **Snowflake Database Support**: Added extraction of the missing `database` parameter from `credentials_json` to pass into `snowflake.createConnection`.
+* **SQLite Path Traversal**: Tightened SQLite path traversal protections by using `fs.realpathSync` to properly resolve and block symlink escapes.
+* **Adapter Pool TTL**: Fixed the adapter pool race condition in `adapterPoolRegistry.ts` by checking the TTL condition immediately prior to executing async closes during iteration.
+
+---
+
+## Part 6: Complete Removal of Legacy KPI Migration & Raw SQL Logic
+*This phase entirely stripped the legacy `inclusions` and `exclusions` raw SQL filter parameters from the platform, standardizing on the new `filter_logic` AST approach.*
+
+### Backend Cleanup
+* **API Validation & Types**: Removed the `inclusions` and `exclusions` arrays from `KpiMetric`, `GlobalAiKpi`, `CreateKpiMetricPayload`, and Zod schemas in `kpiMetrics.ts`. The platform no longer expects or stores raw SQL strings for filters.
+* **Database Schema**: Dropped `inclusions` and `exclusions` columns from the `kpi_metrics` table schema in `002_kpi_metrics.sql`.
+* **Compiler Simplification**: Stripped legacy filter arrays from the `compileKpiQuery` signature in `compiler.ts`. Removed the `RAW_FILTER_DISALLOWED` legacy compatibility branches since `type: "raw"` filter logic is completely obsolete.
+* **Autonomous AI Orchestration**: Stopped the autonomous planner from evaluating or merging legacy `exclusions` and `inclusions` before compiling the final query in `autonomousAi.ts`.
+* **Removal of Migration Meta Logic**: Completely removed the `needsMigration`, `hasLegacyFilters`, `isMultiTableLegacy`, and `migrationMessage` payloads from `kpiMetrics.ts`. The system will no longer warn users to migrate, as old db connections are cut loose and all code strictly relies on the new AST.
+
+---
+
+## Part 7: Deterministic Simple Queries & UI Refinements
+*This phase focused on ensuring straightforward data retrieval bypasses the LLM to provide immediate, reliable answers, while refining the KPI builder interface.*
+
+### 1. Deterministic Simple Query Executor
+* **Bypassing Autonomous AI**: Established a deterministic path for questions classified as `SIMPLE` (e.g. basic table listings or direct column requests like "what is u_gsc_url?") in `query.ts`. These now entirely bypass the LangGraph looping agent.
+* **Simple Query Executor**: Created `analytics/executor/simpleQueryExecutor.ts` to process and execute simple lookups. It deterministically resolves table constraints, limits output (default 50 rows), applies filters, and returns a consistently shaped `AnalyticsResponsePayload` without risking token waste or agent recursion.
+* **Safe Quoting**: Implemented a robust `quoteIdentifier` function that splits multi-part identifiers (e.g., `schema.table`) by dots before quoting, preventing database adapter crashes on queries against fully qualified table names.
+* **Refined Insight Text**: Updated insight generation for direct data queries to specify exactly what is being returned, differentiating between single-column values ("Here are sample values...") and entire records ("Here are sample rows...").
+
+### 2. UI / UX Fixes
+* **KPI Metrics Join UI**: Fixed the rendering of the join type dropdown (`INNER`, `LEFT`, `RIGHT`) within the Cascading Joins panel of `KPIMetrics.jsx`. Replaced `border-none bg-transparent` with `appearance-auto border bg-white shadow-sm hover:border-gray-400` to ensure the component is easily recognizable and acts as a clickable interactive menu.
+
+---
+
+## Part 8: End-to-End Architectural Migration to LLM-Driven Intent
+*This phase replaced the brittle deterministic Regex intent classifier with a flexible LLM-driven architecture, enabling natural language understanding of ambiguity, table selection, and basic data lookups.*
+
+### 1. Stripping Brittle Routing Logic
+* **Query Classifier (`queryClassifier.ts`)**: Gutted the regex-based routing logic for `SIMPLE` and `AMBIGUOUS` queries (Steps 1, 2, and 4). Only `KPI` and `GREETING` modes remain deterministic. All other queries gracefully fall through to `COMPLEX` mode, delegating intent resolution entirely to the Autonomous AI.
+
+### 2. LLM Planner Schema Upgrades
+* **Query Plan Schema (`planner/index.ts`)**: Upgraded `QueryPlanSchema` and `LaxQueryPlanSchema` to formally support `errorMode: "AMBIGUOUS"` and `errorMode: "UNRECOGNIZED"`.
+* **Ambiguity Details**: Added a structured `ambiguityDetails` payload (reason, candidateTables, column) so the LLM can precisely explain *why* a query is ambiguous and offer candidate tables for user resolution.
+
+### 3. Dynamic Intent Resolution Prompts
+* **Planner Prompting (`planner/index.ts`)**: Rewrote the system prompt's `dynamicRules` for non-KPI queries. The LLM is now explicitly instructed to handle intent resolution: mapping simple data lookups to `groupBy` fields (without hallucinating metrics), throwing `AMBIGUOUS` if a column exists in multiple tables without context, and throwing `UNRECOGNIZED` for completely out-of-bounds questions.
+
+### 4. Autonomous AI Orchestration Updates
+* **Agent Error Handling (`autonomousAi.ts`)**: Upgraded the `plannerTool` within LangGraph to intercept `AMBIGUOUS` and `UNRECOGNIZED` error modes from the LLM. It parses the `ambiguityDetails` payload, serializes it into a specific fatal error format, and aborts the agent loop early to save tokens and latency.
+* **Graceful Fallbacks (`autonomousAi.ts`)**: Updated the orchestrator's global catch block to intercept the serialized `AMBIGUOUS_MODE` errors. It now correctly structures a rich JSON response with `candidateTables` and `message` so the frontend UI can render interactive table selection cards for the user to resolve the ambiguity.
+
+---
+
+## Part 9: V9 Query-Pipeline Reliability, LLM-Provider Hardening & Theme Compliance
+*This phase was a full-repo bug audit of the current architecture — `runKpiAgentPipeline` (certified-KPI-only) + `runSimplePipelineV2` (deterministic, replacing the dead ReAct agent) — followed by a live-fire debugging pass after switching LLM providers away from an exhausted Cerebras trial quota. Every fix below was verified against a real connection/catalog, not just unit tests, and the full self-test suite (`sql/compiler.ts` + `tests/regression.test.ts`, 32 cases total) stayed green throughout.*
+
+### 1. Query Router — the largest single source of "the pipeline is broken" reports
+* **Pre-query keyword hijacking**: `classifyPreQueryIntent()` in `query.ts` used broad, unanchored regexes (`\b(today|date|day|time|now)\b`, `\b(you|help|...)\b`, `\b(hi|test|morning|...)\b`) that matched ordinary business questions — "What were total sales by **day**?", "Can **you** show me revenue by region?", "Show revenue this **morning**" — and returned a canned greeting/clock response *before* `connectionId` was checked or `mode` was honored, silently bypassing both pipelines entirely. Replaced with whole-message anchored patterns (matching the style the existing GREETING check already used) so only literal greetings/date-asks/help-asks short-circuit; verified against 26 test phrasings.
+* **Single-word KPI over-matching**: investigated tightening `scoreKpiMatch()` so a KPI named e.g. "Revenue" wouldn't match on the bare word appearing anywhere in an unrelated sentence. Two different heuristics were tried and both regressed extremely common real phrasing ("What is our revenue this quarter?"); reverted rather than ship a fix that breaks everyday queries in exchange for blocking a rare edge case.
+* **Conversation memory was collected but never used**: `conversationContext` (last topic, referenced tables/columns) was built from `conversationStore` and passed into `classifyQuery()`, which never once read the parameter — a dead argument. Neither `planKpiQuery()` nor `planSimpleQuery()` accepted it at all. Threaded it through both pipelines into the LLM planner prompts with an explicit "use this ONLY to resolve pronouns like it/that, never override an explicit mention" rule, so a pronoun-only follow-up ("what can we group it by?") after discussing a KPI now resolves correctly. Kept intentionally small: last assistant answer truncated to 400 chars + deduped table/column name lists — not the full transcript.
+* **`forcedTableContext` was accepted, validated, then discarded** (`void forcedTableContext;`) even though the frontend's "ask about this table" flow genuinely sends it. Wired it up: reorders the catalog so the named table is planned first (biasing the LLM toward it without losing the ability to join a related table).
+
+### 2. KPI Pipeline
+* **Null aggregate rendered the literal word "undefined"**: a scorecard query with zero matching rows still returns one row with a `NULL` value (SQL aggregate-over-empty-group behavior), which `insightBuilder.ts` rendered as `"The Total Revenue is undefined."` via `null?.toLocaleString()`. Null-guarded every value interpolation in the answer/grouped-list/top-row text.
+* **Certified KPI formula could be silently shadowed**: `resolveMetricAcrossDatasets()` checks per-dataset local metrics before the certified `global_kpis` entry; if any involved table had a same-named local metric, its (possibly different) formula won over the certified one with no warning. Certified `matchedKpi.expressionSql` is now always preferred.
+* **Empty `involvedTables` silently defaulted to a random table**: `sanitizeAndCorrectPlan()`'s generic "no datasets → use catalog[0]" fallback meant a misconfigured KPI (no tables selected) would quietly compute against whatever table happened to be first in the catalog. Now fails loudly with a message telling the user to fix the KPI definition.
+* **`needsLlmPlanning()` missed plural grouping words** (`\bregion\b` doesn't match "regions") — fixed to accept optional plural suffixes.
+* Misleading "no filter was requested" driver text on the deterministic scorecard path now reflects the real, final filter list after dashboard/date filters are merged in.
+* **Multi-column `GROUP BY` silently collapsed to one dimension**: `compileKpiQuery` aliased every group-by column as the same `"group_key"` (duplicate SQL column names — every driver keeps only the last one), so "revenue by region and category" dropped region entirely with no error. Fixed to emit `group_key_1`/`group_key_2`/... like the simple compiler already did.
+
+### 3. Simple Pipeline (`runSimplePipelineV2`)
+* **Almost every "total/sum/average of X" question crashed**: the plan sanitizer rewrites a dynamic `SUM(budget)` metric into a bare name `sum_budget` and stashes the real formula on a per-request catalog clone; the KPI compiler re-resolves that name back to its expression via the catalog, but `compileSimpleSelectQuery` never received the catalog at all, so it tried to resolve `sum_budget` as a literal column and threw `Unknown column reference`. Per product decision, an uncertified ad-hoc aggregate with no matching KPI now returns a `mode: "needs_kpi"` response naming the exact formula/table to create, instead of crashing or silently computing an uncertified number.
+* **No join-path inference for multi-table simple queries**: `compileSimpleSelectQuery` had no catalog parameter and no BFS fallback, so a multi-table question with no explicit join could compile a query referencing a table never introduced via `FROM`/`JOIN`. Added the same catalog-driven `autoGenerateJoins` BFS the KPI compiler already used.
+* **`detectWriteIntent` blocked read-only questions** containing common nouns that happen to match write-verb regexes ("the latest **update** on orders", "when was this **created**", "our order **drop**-off rate"). Replaced the bare word-boundary check with SQL-shaped patterns (`insert into`, `update x set`, `delete from`, ...) plus an imperative-position check, verified against 12 phrasings including the exact false positives above.
+* **Ambiguous non-metric columns bypassed the disambiguation UI**: only messages containing the literal `AMBIGUOUS_MODE`/`AMBIGUOUS_KPI_MODE` sentinel got the structured picker response; an ambiguous groupBy/filter column threw a differently-worded error and fell through to a generic failure. `resolveColumnAcrossDatasets` now throws the same sentinel format.
+* **Large-schema catalogs blew the model's context window**: the planner always sent the *entire* catalog (all tables' columns/relationships) as JSON on every call regardless of question scope. On a 73-table connection this alone exceeded a smaller model's context length outright (`context_length_exceeded`). Added `selectRelevantDatasets()`: scope the catalog to explicitly-named tables (+ one relationship hop, for joins) or recently-discussed tables from conversation context; only fall back to a capped slice of the full catalog when nothing is named.
+* **Model correctly builds a plan but mislabels it as a metadata question**: smaller/faster models occasionally set a coherent `datasets`+`groupBy`/`metric` plan but still flag `errorMode: "UNRECOGNIZED"` and answer with a fabricated guess instead of running the query (e.g. "what are the names in the account table" → "The names are: id, name." with no query executed). Sharpened the prompt's METADATA-vs-DATA distinction with explicit contrastive examples, and — since prompt tightening alone didn't fully fix it on the smaller model — added a code-level safety net in both pipelines: if the plan actually looks coherent (real datasets + groupBy/metric), trust that over the model's self-reported `errorMode` rather than discarding it for a hallucinated answer.
+* **Successful conversational answers were reported as failures**: `UNRECOGNIZED_MODE` with a `conversationalAnswer` (e.g. "what can we group this by?") is a legitimate, correct response, not an error — but it was logged as `[Simple/KPI pipeline] execution failed:` with a full stack trace and returned as `success: false, mode: "unrecognized"`, which the frontend rendered as a red "Pipeline Error" box around a perfectly correct answer. Now returns `success: true, mode: "assistant"` and only logs a real error for genuinely unexpected exceptions.
+
+### 4. SQL Compiler & Executor (`sql/compiler.ts`, `executor/buildLiveAdapter.ts`)
+* **The 30s query timeout was inert for 4 of 7 dialects**: `withTimeout()` fired an `onTimeout` side-effect on the timer but then kept `await`-ing the driver call regardless — sqlite/snowflake/bigquery/databricks had no `onTimeout` handler at all, so a hung query on those dialects blocked the request indefinitely. Rewrote to `Promise.race` the driver call against the timer so it actually rejects at 30s on every dialect, and added real cancellation where the driver supports it (statement `.cancel()` for Snowflake, job `.cancel()` via `createQueryJob` for BigQuery, session close+reopen for Databricks).
+* **Databricks never bound query parameters** — the compiler emits `?` placeholders for it, but `executeStatement` never received `query.params`. Any filtered query sent literal `?` characters to Databricks SQL. Fixed to pass `ordinalParameters`.
+* **Double-release masked the real error** on timeout for MySQL/Postgres (`onTimeout` released the connection with an error, then the unconditional `.finally()` released it again, throwing "already released" and hiding whatever actually failed). Added a `released`/`handled` guard flag.
+* **"today"/"yesterday" filters dropped the time component**: `resolveRelativeTime()` bound the same bare date to both ends of the `BETWEEN`, which most engines parse as midnight — against a `DATETIME` column this matched only rows at exactly `00:00:00`. Expanded to full start-of-day/end-of-day bounds, matching the pattern `validatePlan.ts`'s date-equality path already used correctly.
+* **Auto-generated joins could route through tables nobody asked for**: `autoGenerateJoins`'s BFS ran over the entire catalog graph, not just `plan.datasets`, so it could silently bridge through an unrequested table and change result cardinality. Restricted the BFS to only traverse tables already in the plan.
+* Compiled-query `joins` metadata (shown in the frontend's SQL/Trace tabs) reflected the caller's *original* `plan.joins`, not the joins actually rendered into the SQL when auto-generation kicked in. `finalize()` now takes the real `activeJoins` used.
+
+### 5. LLM Provider, Rate Limits & Schema Validation
+* **Cerebras free-trial quota exhaustion mislabeled as "prompt too large"**: Cerebras' free tier caps at 30K tokens/min and only 1M tokens/day (see `inference-docs.cerebras.ai/support/rate-limits`); heavy testing exhausted the daily budget, and a broad `invalid_request_error` string match in `errorFormatter.ts` mislabeled every failure in that bucket — including ones unrelated to size — as "The KPI planner prompt was too large" (wrong even when the *simple* planner failed). Switched the active provider to the already-configured `GROQ_API_KEY`, then later to `llama-3.3-70b-versatile` for double the tokens/min and materially better instruction-following (traded for a smaller daily budget — know your provider's dashboard before a heavy testing session). Split the error branch into three accurate messages: real context-length overflow, tool-call schema mismatch, and generic provider rejection.
+* **`LaxQueryPlanSchema`/`QueryPlanSchema` rejected valid model output outright**: `errorMode`, `conversationalAnswer`, and `ambiguityDetails` were `.optional()` but not `.nullable()`, unlike every other field in the same schema. Groq's tool-calling commonly emits explicit `null` for an absent optional field rather than omitting it — that mismatch failed Groq's own tool-call JSON schema validation and rejected the *entire* tool call, discarding an otherwise perfectly correct plan. This was the actual root cause behind a `context_length_exceeded`-labeled failure that turned out to be a schema bug, not a size problem. Added `.nullable()` to all three fields.
+* **`resolveModel`'s groq branch silently ignored `LLM_MODEL`** when called with a planner alias (`semantic-slm`/`verifier-slm`) due to a `modelName ? undefined : ...` short-circuit that the cerebras/openai branches never had. Fixed for parity.
+* Bumped `LLM_MAX_RETRIES` from 1 → 3 so a genuinely transient 429 (not a hard quota exhaustion) gets retried with the SDK's built-in backoff instead of failing on the first hit.
+
+### 6. Data Integrity, Security & Route Hardening
+* **Multi-schema catalog collision**: `buildAiCatalog` derived `datasetName`/`physicalTable` from the *connection-level* `schema` variable instead of each table's own `t.table_schema`. A connection with no `default_schema` (e.g. MySQL enumerating tables across every non-system database) collapsed same-named tables from different schemas — `db1.orders` and `db2.orders` — into one catalog entry, silently merging their columns and losing the schema qualifier needed to query the right one. Now qualifies by the table's own schema.
+* **SQL injection surface in Databricks metadata introspection**: `fetchDatabricksMetadata` built `information_schema` queries via raw string interpolation of `default_schema` with hand-rolled escaping, the only dialect not using parameterized queries for this. Switched to `ordinalParameters`.
+* **Unhandled promise rejection could hang KPI-creation requests**: `kpiMetrics.ts`'s `create()` handler had steps 2–9 (catalog fetch + all validation) sitting outside any try/catch, unlike every other handler in the file — a rejected `fetchMetadata()` call (unreachable DB, auth failure) would leave the request hanging with no response until client timeout. Wrapped in try/catch → `next(err)`.
+* **Boolean/`bit` columns silently dropped from the catalog**: `resolveColumnType()` had no branch for Postgres `boolean`/`bool` or MSSQL `bit`, so flag columns like `is_active`/`is_deleted` fell through to `null` and were excluded from the catalog entirely on those dialects (MySQL was unaffected since `BOOLEAN` there is a `TINYINT(1)` synonym). Added a branch, carefully scoped to exclude the unrelated `bit varying`/`varbit` type.
+* **Oracle-only system-view exclusion patterns hid legitimate views**: `VIEW_EXCLUDE_PATTERNS` included `/^all_/i`, `/^dba_/i`, `/^user_/i` — Oracle data-dictionary prefixes — even though this app connects to mysql/postgres/mssql/sqlite/snowflake/bigquery/databricks, never Oracle. Real business views named e.g. `user_accounts` or `all_time_sales_view` were silently excluded on every dialect for zero benefit. Removed the Oracle-specific patterns.
+* Reviewed `connections/poolManager.ts` (a second, separate connection-pool implementation from the one the analytics pipeline uses) for a suspected dead-code leak risk — confirmed it's live (used by schema-browsing/`dataCatalog.ts`) and already correctly evicted on connection delete via `evictCatalogPool`. No change needed; audit finding was a false alarm.
+* Documented (did not fix) the dead `runSimpleAgentPipeline` LangGraph ReAct agent with a prominent comment listing its known bugs (stale `fatalError` closure that discards a successful self-corrected run, wrong SQL compiler for metric-less list queries, missing the write-intent/date/result-quality guards `runSimplePipelineV2` has), so a future re-enable doesn't ship known regressions unknowingly. It is confirmed unreachable from any live request path — the only import is commented out in `query.ts`.
+
+### 7. Chart & Output Display
+* **Bar charts with no information content**: a plain list query (e.g. "what are the names in the account table") has no real metric, so the compiler fills in a synthetic `COUNT(1)` per row just to shape the SQL — every bar ends up height 1, and the resulting chart carries zero signal. Same problem for a real aggregate whose values are all identical. `insightBuilder.ts` now returns `chart: null` for both cases; the underlying data table is unaffected.
+* **Frontend ignored the backend's `chart: null` and defaulted to a bar chart anyway**: `renderChart()` in `AnalyticsAI.jsx` used `res.chart?.type || "bar"`, so an explicit "no chart" decision from the backend was silently overridden. Now shows a "No chart to show for this result" message instead when the backend explicitly says there's nothing to plot.
+* Fixed a cosmetic double-space bug surfaced by the above ("Here is the  grouped by name." when `plan.metric` is empty for a list query) — falls back to a generic phrase like "count" instead of interpolating an empty string.
+
+### 8. Frontend Theme Compliance
+*The user asked output display to rely on the app's `--theme-*` CSS-variable system as much as possible instead of hardcoded Tailwind gray/slate/white classes.*
+* `RenderChart.css`'s `.chart-card` background was a literal `#fff` — now `var(--theme-card-bg, #fff)`.
+* `RenderChart.jsx`'s `chart_suggestion` rendering path used a hardcoded `#7d838f` datalabel color and unthemed chart title, inconsistent with the sibling rows-based chart path in the same file that correctly used the `useThemeColor` hook — unified both to use `themeText`/`themeTextMuted`.
+* `InlineState.jsx` (shared empty/loading/error states used by both charts and Observability) had `bg-gray-50`/`bg-white`/`border-gray-200`/`border-gray-300` throughout — routed through `--theme-container-bg`/`--theme-surface`/`--theme-border` (error state intentionally kept its semantic red, since that's meaning, not theme).
+* `AnalyticsAI.jsx`'s `Scorecard` component (the primary "Answer" output surface) had an entirely hardcoded `from-slate-50 to-teal-50/20` background and `text-gray-500` label — now theme-derived. Also blanket-replaced the pervasive `text-slate-700/800/900/600/500/400` and `text-gray-400/500/700`/`bg-white`/`border-gray-200/400` usage across the whole file (36+ call sites) with the matching `--theme-text`/`--theme-text-muted`/`--theme-text-secondary`/`--theme-surface`/`--theme-border(-dark)` tokens — except the three SQL/Semantic/Raw debug `<pre>` code blocks, which keep their deliberate dark terminal styling (`bg-slate-900`) since that's a legitimate, self-consistent design choice independent of the app theme.
+* `Observability.jsx`'s five main card containers were hardcoded `bg-white`/`border-gray-200`/`text-gray-900/500/400` even though the same file already correctly used `--theme-*` tokens for its buttons and some containers — extended the existing pattern to the cards themselves, plus the row-hover background.
+
+---
+
+## Part 10: V10 Tool-Orchestrator Reliability — Startup, Provider-Error Labeling, Classifier/Dimension/Filter Ambiguity Hardening
+*This phase was a full end-to-end verification pass of the current tool-driven orchestrator (`analytics/orchestrator/analyticsOrchestrator.ts` — `runAnalyticsOrchestrator()` is now the single KPI/Simple execution entry point, replacing the old `runKpiAgentPipeline`/`runSimplePipelineV2` split). Every fix below was verified live against real MySQL connections — the Zepto warehouse DB (`zepto_wms_db`, quantities and dates stored as TEXT) and a purpose-built `semantic_test_db` (orders+customers with a duplicated `region` column and an FK join) added as connection id 7 — not just unit tests. The self-test suite (`sql/compiler.ts` + `tests/regression.test.ts`) grew from 27 to 38 cases and stayed green throughout. LLM provider was switched to Groq `llama-3.3-70b-versatile` after the OpenRouter free daily quota (and later Cerebras' free `gpt-oss-120b` on filter+join queries) proved unreliable for the full query range.*
+
+### 1. Startup & Boot Correctness
+* **`.env` loaded after the modules that read it**: `main.ts` called `dotenv.config()` as a normal statement, but tsx/esbuild hoists `import` statements above module-level code — so the entire `./server` import tree (secret crypto, auth middleware, DB pools) evaluated its module-level env checks against an *unloaded* environment. Symptoms: a spurious `CONNECTION_SECRET_KEY is missing` warning on every dev boot, and — with `NODE_ENV=production` — `secretCrypto.ts`'s module-load check would wrongly *crash the boot* when the key lived only in `.env`. Fixed by making `import "dotenv/config"` the very first import.
+* **Auth key frozen at module load**: `authMiddleware.ts` captured `const VALID_KEY = process.env.API_KEY || "default-dev-key"` at import time. It only worked because `dataCatalog.ts` happened to call `dotenv.config()` earlier in the import chain; any import-order shift would silently freeze the fallback dev key as the only accepted credential (rejecting the real key, or accepting the default). Now reads the key per request via `getValidKey()`. Verified on a fresh boot: default key → 401, configured key → 200.
+* **Unhandled rejection in telemetry cleanup**: the 24h `setInterval(cleanupOldTelemetry, …)` invoked an async function with no `.catch`, so a failed cleanup surfaced as an unhandled promise rejection. Wrapped like its `setTimeout` sibling already was.
+
+### 2. LLM / Provider Error Labeling (`errorFormatter.ts`)
+*The central `getFriendlyErrorMessage()` was mislabeling several AI-provider failures as "Database error", telling users to "review the KPI definition or generated SQL" for problems that were entirely upstream of the database.*
+* **Provider HTTP 402 (out of credits / free-tier daily quota) → now an AI Services error** naming the real cause (add credits / wait for reset / switch provider) instead of the generic `Database error: 402 Provider returned error…`. This was hit constantly once the OpenRouter free daily cap was exhausted.
+* **Upstream "Provider returned error" (free-pool serving partner failures)** → classified as an AI Services error suggesting a retry / model switch.
+* **LangChain structured-output failures** (`Failed to parse`, `OutputParserException`, `Could not parse`) and **empty structured completions** → classified as AI Services errors ("output couldn't be parsed into a valid query plan") rather than falling through to `sanitizeDbError`'s "Database error:" prefix. Observed live: Cerebras' free `gpt-oss-120b` returns malformed/truncated structured output specifically on filter+join queries, while Groq `llama-3.3-70b` handled the identical queries cleanly.
+* **Null/undefined error object** no longer throws inside the formatter (`String(error.message)` on a null error) — guarded to return a clean "No error details were provided" message.
+
+### 3. Planner Null-Safety (`pipelines/kpi/kpiPlanner.ts`, `pipelines/simple/simplePlanner.ts`)
+* **`withStructuredOutput` returning null crashed the planner**: both planners did `const result = { ...plan, groupBy: plan.groupBy ?? null }` immediately after `structuredModel.invoke(...)`. When a provider returned an empty/unparseable completion, `invoke` resolved to `null`/`undefined` and `plan.groupBy` threw a raw `Cannot read properties of undefined (reading 'groupBy')` TypeError — which then got mislabeled as a "Database error" downstream (see §2). Guarded both: a nullish plan now throws a clean "language model returned an empty query plan" AI-service error. Hit live on a Zepto relative-date query.
+
+### 4. Classifier — Wrong-KPI "Measure Conflict" (`routes/semanticLayer/queryClassifier.ts`)
+* **A KPI could be answered for a question that named a different measure**: "what is the total **rejected** quantity in the inbound report?" silently matched the **INBOUND Volume** KPI (`SUM(receivedQty)`) and returned that number with full confidence — because the classifier scored on shared nouns ("inbound"/"quantity"→"qty") and the discriminating word "rejected" carried no penalty, while the weak-match caveat only ever fired for single-word KPI names. Added `detectConflictingMeasure()`: when the question contains every distinctive (non-generic) token of a measure-like column that the KPI's formula does *not* aggregate, that KPI is skipped in favor of the next non-conflicting candidate; if all candidates conflict, the request falls through to `COMPLEX` (honest `NEEDS_KPI` / ad-hoc handling) rather than returning a confident wrong number. Deliberately conservative — "total inbound volume" and "… by region" never trip it, and a correct "Rejected Quantity" KPI (if one exists) still wins.
+* **Warehouse columns are TEXT, not numeric**: the first cut keyed on semantic type `"number"`, but Zepto stores `receivedQty`/`rejectedQty` as TEXT (→ semantic type `"string"`), so the guard never fired live. Broadened to any non-date column whose *name* looks like a measure (carries a generic measure token like qty/amount/count), with configured KPI dimensions explicitly excluded so a legitimate "by <dimension>" is never mistaken for a measure conflict. Verified live: "total rejected quantity" now returns a `NEEDS_KPI` prompt to create `SUM(rejectedQty)`; controls ("total inbound volume", "picking accuracy") unaffected.
+
+### 5. KPI Group-By Dimension Allowlist — Duplicate Column Names (verified, `analytics/orchestrator/analyticsOrchestrator.ts`)
+*`resolveMatchedKpiPlanDimensions()` enforces the KPI's configured `dimensions` as a strict group-by allowlist. This session added dedicated coverage and end-to-end proof on `semantic_test_db` (KPI "Order Value", dimensions `orders.region`, `customers.region`, `orders.channel` — `region` duplicated across both involved tables):*
+* Bare ambiguous "**by region**" → asks to disambiguate (`orders.region` vs `customers.region`), no SQL.
+* Unique short name "**by channel**" → resolves to `orders.channel`, executes.
+* User-qualified "**by customers.region**" → resolves with the FK join, executes.
+* Not-configured "**by segment**" → `KPI_DIMENSION_NOT_CONFIGURED`, no SQL.
+* Planner-qualified-but-user-was-bare (LLM guesses a table for a bare ambiguous name) → still treated as ambiguous, because the guard only trusts the planner's chosen table when the user's own question named it.
+
+### 6. KPI Filter Ambiguity — the group-by bug's twin on the WHERE path (`analytics/orchestrator/analyticsOrchestrator.ts`)
+* **A qualified-but-guessed filter column silently filtered the wrong table**: the group-by allowlist protected grouping, but an equivalent hazard existed for filters. The planner is instructed to qualify a column shared by multiple involved tables; when the user's phrasing was a bare ambiguous name ("… where **region** is North"), the planner guessed a table (`orders.region`), and because the ref was already *qualified* it sailed past `resolveColumnAcrossDatasets`' bare-column `AMBIGUOUS_MODE` throw and compiled `WHERE orders.region = 'North'` — which, since orders has no "North", returned a misleading "No data found" instead of the correct `customers.region` result. Added `findAmbiguousKpiFilterField()`, mirroring the group-by guard: it walks the plan's filter tree, and for any qualified filter field whose leaf column exists in ≥2 of the KPI's involved tables, only trusts the planner's chosen table when the user's question named it — otherwise returns the same structured disambiguation response the group-by path uses. Wired into all three checkpoints where the dimension guard already runs (planner output, pre-sanitize, post-sanitize). The KPI's own `filter_logic` is compiled separately and never appears in `plan.filters`, so certified KPI-defined filters are correctly out of scope.
+* **Scanner missed flat conditions (found via live test, not unit test)**: the first cut only recognized filter conditions tagged `type: "condition"`, but real planner output frequently emits flat `{ field, op, value }` objects with no type tag — so the guard silently no-op'd on the exact live query it was meant to catch. Rewrote `collectFilterFields()` to mirror the compiler's own walk (a node with `children` is a group; anything else carrying a string `field` is a condition). Regression tests now cover typed, flat, nested-group, and single-table shapes.
+
+### 7. Planner Prompt — Single-Period Date Filter vs. Trend Grouping (`kpiPlanner.ts`, `simplePlanner.ts`)
+* **"in June 2025" was mis-planned as a time-grain dimension** rather than a WHERE filter, so it hit the group-by dimension allowlist and returned a misleading `KPI_DIMENSION_NOT_CONFIGURED: order_date`. Sharpened rule 5 (timeGrain is ONLY for trend/series requests) and rule 8 (a specific period like "Year 2023"/"in June 2025"/"during Q1"/"on 2025-06-01" is a `between` FILTER — do NOT set timeGrain/timeGrainColumn or put the date in groupBy) in both planner prompts. Verified live: "total order value in June 2025" now filters and returns the correct total.
+
+### 8. Insight Text — Plain Listing Reported as "No Data" (`pipelines/shared/insightBuilder.ts`)
+* A successful metric-less list query (e.g. "show 5 records from asn_report") returned 5 rows but rendered "**No data found** for count in the selected range" — the builder only looked for a synthetic aggregate `value` column that plain listings don't have. Now recognizes a plain listing and reports "Returned N records from <table>" with a matching driver. Verified live.
+
+### 9. Test Infrastructure & Provider
+* Built `semantic_test_db` (10 customers / 60 orders, duplicated `region`, FK `orders.customer_id → customers.id`) on the local MySQL, registered it via `POST /api/connections` (id 7) and created KPI "Order Value" (id 154) via `POST /api/kpi-metrics` — a compact, reproducible fixture for the duplicate-column and cross-table-join cases that the remote RDS connections (unreachable off-VPN) couldn't exercise.
+* Switched `LLM_PROVIDER` to `groq` (`.env`, backup at `.env.bak_provider`) after confirming Groq `llama-3.3-70b-versatile` handles the full query range (filters, joins, sorts, dates) that exhausted-OpenRouter and free-Cerebras could not. `.env` edits need a dev-server restart (`nodemon` watches `src/**/*.ts`, not `.env`).
+* Verified the Data Catalog and Semantic Models tabs (list + per-connection), graceful 404s for nonexistent/non-numeric connection ids, observability logs/metrics (200), and that sensitive-column redaction (`password/ssn/salary/token/secret/apikey/card`) is intact.
+
+### 10. Provider Consolidation & Dead-Code Removal
+* **Cerebras removed entirely** — the supported LLM providers are now **Groq** and **OpenRouter** (plus the generic `openai` OpenAI-compatible `LLM_BASE_URL` escape hatch for self-hosted models such as Ollama/vLLM, which is **intentionally kept** for product use). Dropped the `cerebras` provider from the `LlmProvider` type, `normalizeLlmProvider()` auto-detect, `resolveModel()`/`getLimiter()` defaults, the `createCerebrasModel()` factory, the `getLlmModel()` branch, and the `USE_LLM` key check in `planner/index.ts`; swapped the `api.cerebras.ai` reachability probe for `openrouter.ai` in `errorFormatter.ts`. Purged `CEREBRAS_*` vars from `.env`/`.env.example`/`README.md` and deleted `.env.bak_provider` (which still held the old key), so the Cerebras API key is fully gone from disk. Verified live afterward: backend boots on Groq and a KPI query returns correctly.
+* **Dead files deleted** (all confirmed 0 imports via module- and symbol-level search; `tsc` + the 39-case self-test green after removal):
+  - `src/index.ts` — contained only a `// trigger nodemon reload` comment.
+  - `src/connections/parseHostPort.ts` — a 1-line redundant re-export; the real `parseHostPort` is imported directly from `utils/connectionTester`.
+  - `src/analytics/executor/simpleQueryExecutor.ts` (160 lines) — the deterministic simple-query executor, superseded by the tool orchestrator.
+  - `src/analytics/contextBuilder.ts` (80 lines) — the token-pruning context builder (`extractKpiTables`/`buildSimpleContext`), superseded by `selectRelevantDatasets`.
+  - `src/config/featureFlags.ts` (30 lines) — `circuitBreakerConfig`/`cacheConfig`; the same env values are read directly where used.
+  - `src/catalog/cache.ts` (14 lines) — a duplicate `catalogCache`/`clearMetadataCache`; the live version lives in `routes/semanticLayer/dataCatalog.ts`.
+  - Removed the now-empty `src/config/` and `src/catalog/` directories.
+* **Noted, not done** (cosmetic, deferred): `analytics/pipelines/` is now a misnomer — after the orchestrator migration it holds only the KPI/Simple planners and shared insight/quality/response helpers, no actual "pipelines". A rename to `analytics/planning/` (or flattening the single-file `kpi/` and `simple/` subfolders) would be clearer but touches ~15 import paths, so it was left as-is to avoid churn.
+
+### 11. SQL Compiler — Aggregate Fan-Out via Filter-Only Joins (`sql/compiler.ts`)
+* **A COUNT/SUM KPI silently inflated ~5.8× when it joined a table only to filter on it.** Found on the real `gsconnectdev` "Volume Resolved" KPI: `COUNT(case.number)` with `INNER JOIN GS_SYS_USER ON case.assigned_to = user.name`, joined solely to apply the filter `user.web_service_access_only != 'true'`. `GS_SYS_USER.name` is non-unique (64 rows, only 23 distinct names — `csr_bom_01` appears 8×), so each case row fanned out ~5.8× (max 16×) and the COUNT ballooned. The KPI reported **123,373**; the true value is **21,397** (verified by direct SQL: case-only count = 21,399; `COUNT(DISTINCT number)` over the join = 21,311). Every result of the KPI was affected — total, monthly trend (~17K/month instead of ~3K), and every group-by.
+* **Root cause**: the compiler already collapses an *existence-only* INNER JOIN into a `WHERE EXISTS` semi-join to avoid exactly this fan-out, but `shouldRenderJoinAsExists` treated ANY reference to the joined table — including a filter — as a reason to keep the real join (`references.allTables` included filter tables). A prior self-test even codified that ("fanout inner join remains when joined table is filtered"). That was incomplete: a filter on a filter-only table can be *pushed inside* the EXISTS.
+* **Fix**: split table references into `nonFilterTables` (SELECT/GROUP/metric/time-grain — these still block conversion because the rows are consumed) vs. filter-only references. A join whose right table appears only in filters is now rendered as `EXISTS (SELECT 1 FROM right WHERE <join cond> AND <that table's filters>)`, with those filter units removed from the outer WHERE. Conservative guards preserve correctness: only `INNER` joins convert; a filter unit that mixes the joined table with another table (e.g. an OR spanning tables) can't be pushed, so that join falls back to a real join; and filters are matched/removed by AST-node identity so nothing is dropped or double-applied. Filter sources are flattened along top-level `AND` only (`flattenAndUnits`), so an `OR` is never split. Result SQL is byte-identical in the common (no-push) case.
+* **Verified**: 4 new compiler self-tests (semi-join with pushed filter; mixed-OR keeps real join; mixed same-/other-table filters split correctly with exact param order; group-by on joined table keeps real join). Live on `gsconnectdev`: "volume resolved" now returns **21,397** with `WHERE EXISTS (... AND user.web_service_access_only != ?)` and no `INNER JOIN`; monthly trend and "in 2025" (18,151) also correct and still semi-joined; the ambiguous-`u_gsc_region` filter still correctly returns AMBIGUOUS. Full self-test suite: 27 compiler + 39 regression cases green.
+
+### 12. NVIDIA NIM Provider + HTTP 403 Error Labeling
+* **Added NVIDIA NIM as a first-class LLM provider** (`LLM_PROVIDER=nvidia`). NIM is OpenAI-compatible (https://docs.api.nvidia.com/nim/reference/llm-apis), so it reuses `ChatOpenAI` with `NVIDIA_BASE_URL` (default `https://integrate.api.nvidia.com/v1`) and `NVIDIA_API_KEY`; default model `meta/llama-3.3-70b-instruct` via `NVIDIA_MODEL`. Wired through `normalizeLlmProvider` (explicit + auto-detect), `resolveModel`, `getLlmModel` (`createNvidiaModel`), the `USE_LLM` gate, and per-provider rate-limit env keys. No hardcoding — any NIM model id works via `NVIDIA_MODEL`. Verified live: a full KPI query planned and executed correctly through the NVIDIA model (structured-output planning included).
+* **HTTP 403 from an LLM provider was mislabeled as "Database error"** (same class as the earlier 402 fix). NVIDIA's free build tier returns 403 when bursty traffic trips its per-minute cap; `getFriendlyErrorMessage` now classifies `status === "403"` / `403 status code` / `forbidden` as an AI Services error explaining the likely causes (model access / credits / request cap) and suggesting a slowdown or provider switch. Confirmed the throttle is transient (the same query succeeds after a short pause). Default `NVIDIA_MIN_INTERVAL_MS` set to 2500ms to stay under the cap for a single user.
+* **Dynamic-code audit** (per request): scanned all session changes for hardcoded database/table/column identifiers — none in production code (the only literals like `receivedQty`/`rejectedQty` are illustrative EXAMPLES inside explanatory comments in `queryClassifier.ts`). Every fix operates on the live catalog/resolver/plan and generalizes to any DB, table, or column.
+* **LLM "Request timed out" was mislabeled as a database error.** The OpenAI-compatible SDK throws `APITimeoutError` / "Request timed out." when a model is slow; the existing check matched only the token "timeout", so "timed out" (space) slipped through to the DB-error fallback. Added a precise branch matching `APITimeout`/"Request timed out" → AI Services error, while deliberately NOT matching the database `withTimeout` message "Query timed out after <n>ms" (which stays a DB error). Verified live on NVIDIA (its free tier queues the 70B model): the KPI total, ratio, and the gsconnectdev semi-join ("volume resolved" = 21,397) all succeed through NVIDIA; heavier group-by/join queries intermittently time out under free-tier latency, now surfaced as a clear AI Services error. Raised `NVIDIA_TIMEOUT_MS` to 60000 to reduce those timeouts (a simple listing that timed out at 30s then succeeded). Regression suite now 41 cases.
+
+### 13. Top-N Planner Prompt Fix + Model-Reliability Finding
+* **"Top/Bottom N by <metric>" could put the metric where a column belongs.** Several models (NVIDIA 8B/24B) planned "top 2 channels by order value" by adding the metric/KPI name (`order_value`) into `groupBy` or a column ref, which the validator correctly rejected ("Validation failed: Column order_value…") — a safe failure, but a failed query. Sharpened planner rules 6–7 in both `kpiPlanner.ts` and `simplePlanner.ts`: ranking is ALWAYS by the metric automatically; `groupBy` holds ONLY the breakdown dimension, never the measure being ranked (with a worked example). This fixed the query on the 8B model.
+* **Model-reliability finding (end-to-end pass).** A 12-case live battery covering every guard and fix (greeting/write-guard/ambiguous-date/catalog/KPI total/measure-conflict/semi-join/dimension-ambiguous/dimension-resolve/filter-ambiguous/date-filter/top-N) was run per provider. **Groq `llama-3.3-70b-versatile` planned every case CORRECTLY and consistently** (the only non-pass was a transient per-minute rate-limit on the 12th rapid query, cleanly labeled — not a wrong answer). The **NVIDIA free-tier fast model `llama-3.1-8b-instruct` proved inconsistent**: the same "total order value in June 2025" returned 34,057.37 (correct), then 1,173.29 (wrong/too-narrow date range), then a spurious "region ambiguous" across three runs, and it degraded the measure-conflict case from `NEEDS_KPI` to "no data". NVIDIA 70B is more capable but the free tier queues/times it out. **Conclusion: `LLM_PROVIDER=groq` reverted to the default** (reliable); NVIDIA remains fully wired and available (key + config in `.env`) for on-demand use, with the reliability trade-off documented. The application, all safety rails, and every session fix are correct end-to-end — model choice is the remaining variable, and Groq is the safe one.
+
+### 14. Certified-KPI Routing Defect ("volume resolved based on u_gsc_region")
+*A live gsconnectdev query "what is volume resolved based on u_gsc_region?" failed with two confusing, misleading errors on successive attempts: first "Query has 3 datasets but only 1 join(s)… gs_sys_user not reachable", then "Database error: Unknown column reference: volume_resolved". The KPI configuration was valid; the defect was entirely in routing and compilation, before any database execution.*
+* **Root cause — false measure-conflict on a shared namespace token.** `detectConflictingMeasure` (queryClassifier.ts) treated the schema-prefix token `gsc` — shared between the requested dimension `u_gsc_region` and unrelated measure-like columns `u_gsc_amt_qty_1/2/3` — as evidence the user named a competing measure, so it rejected the exact `volume_resolved` KPI and routed to the Simple pipeline. Fixed: a candidate measure column's "distinctive tokens" now exclude every token that appears in the KPI's configured dimensions (`dimensionContextTokens`), so a shared namespace/prefix can never masquerade as a competing measure. The literal-column escape hatch (user types the real column name) is preserved.
+* **Consequence 1 — disconnected multi-table Simple plan.** In Simple mode the planner picked an extra dataset; the orchestrator appended the KPI's two required tables but not its configured join, yielding 3 datasets + 1 join. `validatePlan` correctly rejected it (auto-heal only runs at zero joins). Now moot because the query routes to KPI mode, but also guarded by the reroute below.
+* **Consequence 2 — certified metric hit the Simple compiler.** On retry, `volume_resolved` (a certified metric NAME, not an inline aggregate) reached `compileSimpleSelectQuery`, which searched for a physical column literally named `volume_resolved` → "Unknown column reference".
+* **Fixes.** (a) `promoteCertifiedKpiPlan()` (analyticsOrchestrator.ts): if the Simple planner returns a plan whose metric matches a certified KPI name, promote it to the KPI profile — pin the KPI's datasets, joins, formula, filters, and dimensions — then re-run the dimension-allowlist and filter-ambiguity guards. (b) A hard compiler guard (`CERTIFIED_METRIC_REQUIRES_KPI`, compiler.ts) rejects a certified metric name reaching the Simple compiler with a clear "Internal routing error … no database query was executed" instead of a misleading "Unknown column". (c) errorFormatter no longer labels these pre-execution planning/routing failures as database/connection errors. (d) The KPI planner prompt now treats "based on X" as a group-by trigger.
+* **Verified.** Live: "based on u_gsc_region" → clean AMBIGUOUS ("u_gsc_region exists in both gs_sys_user and gs_sn_customerservice_case — pick one") because both are configured dimensions; "volume resolved" still returns 21,397 via the semi-join; a qualified "case.u_gsc_region" grouping routes to KPI, compiles a GROUP BY, executes, and the result-quality guard correctly reports the source column is entirely null (a data issue, not code). Regression suite grew to **49 pipeline + 27 compiler cases**, including the exact `volume_resolved`/`u_gsc_region` phrasing. Independently re-verified: `tsc` clean, 27+49 green, and the full guard/fix battery correct end-to-end (the only live "failures" were Groq free-tier daily-quota exhaustion, correctly labeled as AI Services errors).
+
+### 15. Orchestration Made Agent-Only (removed the deterministic tool-loop) — SUPERSEDED by §16
+*Per request, the orchestrator now runs exclusively as a LangGraph ReAct agent — the agent calls the orchestrator's tools and decides which to call next — with no execution-mode toggle.*
+* **Removed the `tool-loop` path.** Deleted `runToolDirectedOrchestrator()` (the deterministic backend loop that advanced tools by each tool's `next`) and the `ANALYTICS_ORCHESTRATOR_EXECUTION_MODE` branch in `runAnalyticsOrchestrator()`. Every request now always builds `createReactAgent({ llm: getLlmModel(), tools })` and invokes it; the agent selects each tool guided by the tools' structured `next`/retry/terminal results. The tools keep enforcing prerequisites/ordering and share backend-owned run state through the per-run queue, so the agent still can't run SQL out of order, skip validation, or fabricate results, and the API response is still assembled deterministically from state (the agent's final text is ignored).
+* **Removed the env toggle** `ANALYTICS_ORCHESTRATOR_EXECUTION_MODE` from `.env`, `.env.example`, and all docs (README, workflow, project explanation). It is agent-only internally, not configurable. `ANALYTICS_ORCHESTRATOR_RECURSION_LIMIT` and `ANALYTICS_ORCHESTRATOR_MAX_TOOL_CALLS` still bound the agent loop.
+* **Trade-off (documented).** Agent mode makes roughly one LLM call per tool (~8 per request) versus the ~1–2 of the old loop, so it consumes materially more provider quota and latency — size rate limits accordingly (especially on free tiers).
+* **Verified.** `tsc` clean; 27 compiler + 49 regression tests green; live end-to-end (NVIDIA `llama-3.1-8b-instruct`) — the agent drove all eight tools in order for a scorecard KPI ("total inbound volume" = 10,320,701) and for the cross-table semi-join KPI ("volume resolved" = 21,397, `WHERE EXISTS`, no fan-out).
+
+### 16. Both Orchestration Modes Restored, Clearly Named (reverses §15)
+*Per follow-up request, the deterministic loop is kept alongside the ReAct agent, selectable via a properly-named env switch. §15's agent-only removal is reversed.*
+* **Restored the deterministic loop.** Re-added the backend loop (renamed from `runToolDirectedOrchestrator` to the clearer **`runDeterministicOrchestrator()`**) that starts at `query_classifier_tool` and follows each tool's `next`/retryable/terminal result with no LLM deciding the order.
+* **Clean mode switch (internal, env-selectable).** `runAnalyticsOrchestrator()` now calls `resolveOrchestratorMode()` and branches: **`deterministic`** (default) → `runDeterministicOrchestrator()`; **`agent`** → `createReactAgent(...)`. Introduced a `type OrchestratorMode = "deterministic" | "agent"`. Both modes share the identical tools, prerequisite guards, per-run queue, and deterministic response assembly — only WHO picks the next tool differs.
+* **Renamed the env var for clarity:** `ANALYTICS_ORCHESTRATOR_EXECUTION_MODE` (values `tool-loop`/`llm-agent`) → **`ANALYTICS_ORCHESTRATOR_MODE`** (values `deterministic`/`agent`), documented in `.env`, `.env.example`, README, workflow, and project explanation. Default = `deterministic`.
+* **Strict configuration validation.** `resolveOrchestratorMode()` now normalizes case/whitespace, accepts only `deterministic` or `agent`, and throws a clear configuration error for stale or misspelled values instead of silently falling back. Regression coverage checks the default, both valid modes, normalization, and rejection of the removed `tool-loop` name.
+* **Cost model (documented in each config).** `deterministic` spends only the planner's ~1 LLM call per request; `agent` spends ~1 LLM call per tool (~8 per request), so ~5–8× more provider quota and latency.
+* **Verified both modes live** (NVIDIA `llama-3.1-8b-instruct`): `total inbound volume` → 10,320,701 with all 8 tools driven, once in the default deterministic loop and once with `ANALYTICS_ORCHESTRATOR_MODE=agent`. `tsc` clean; 27 compiler + 49 regression tests green; no stray `tool-loop`/`llm-agent`/`EXECUTION_MODE` references remain in code.
+
+### 17. Deterministic Loop Silently Regressed Back to Starting at `planner_tool` (reverses the regression, not §16 itself)
+*§16 verified the deterministic loop starts at `query_classifier_tool` and drives all 8 tools. At some point after that, `runDeterministicOrchestrator()`'s `nextToolName` was hardcoded back to `"planner_tool"`, so every deterministic-mode run silently skipped `query_classifier_tool` and `pre_query_guard_tool` as recorded steps — the user noticed because the execution trace no longer showed them.*
+* **Not a correctness bug, a visibility bug.** `planner_tool` has its own inline fallback that calls `classifyAnalyticsProfile()` and `applyPostLlmPreQueryGuard()` when `state.classification` isn't already set, so classification and the write/date guards still ran — just folded silently into `planner_tool` instead of as their own tool steps. Results were correct; the trace was incomplete and out of parity with `agent` mode (whose own system prompt still says "1. Call query_classifier_tool first...").
+* **Fix.** `runDeterministicOrchestrator()`'s initial `nextToolName` restored to `"query_classifier_tool"` ([analyticsOrchestrator.ts](backend/src/analytics/orchestrator/analyticsOrchestrator.ts)), so the loop again mirrors `agent` mode's tool order exactly — only WHO picks `next` differs, per the original §16 design.
+* **Verified.** 27 compiler + 71 regression tests green. Live: full 8-step trace confirmed for both an ungrouped scorecard query and a grouped query; confirmed the fix also threads correctly through early-terminal runs (a `KPI_DIMENSION_NOT_CONFIGURED` rejection correctly truncates to 3 steps: `query_classifier_tool` → `pre_query_guard_tool` → `planner_tool`).
+
+### 18. Certified-KPI Data-Quality Investigation on `gsconnectdev` — "Region-Matched Resolved Cases" = 1, "Volume Resolved by u_gsc_region" = all blank
+*Two KPIs against the live `gsconnectdev` connection returned technically-correct but alarming results: a brand-new "Region-Matched Resolved Cases" KPI (INNER JOIN `case.u_gsc_region = region.name`, collapsed by the compiler's existing semi-join optimization into a `WHERE EXISTS`) returned 1 across a 2000–2030 date range; "Volume Resolved" grouped by `u_gsc_region` came back with every group blank, correctly triggering the existing `GROUP_BY_VALUE_UNAVAILABLE` guard and suppressing the chart.*
+* **Root cause confirmed with live data, not guesswork.** A one-off read-only diagnostic script (reusing the app's own `decryptSecret`/`getMysqlPool`, run from `backend/scripts/` then deleted) against `gsconnectdev` found: of 21,399 in-scope resolved/closed cases, only **2** have a non-blank `u_gsc_region` (99.99% blank); of 64 `GS_SYS_USER` rows, only 1 is non-blank and that value isn't even a real region. The `region` lookup table itself is fine (4 rows, exact string match to the rare populated values) and the `assigned_to = GS_SYS_USER.name` join is correct (sampled matches confirm it, e.g. `csr_bom_02` → `csr_bom_02` — this schema stores the literal username in `assigned_to`, not a ServiceNow `sys_id`). **Conclusion: pure source-data population gap in `u_gsc_region`, not an application bug** — compiler, planner, and quality-guard all behaved exactly as designed and already covered by regression tests (98/98 passing throughout).
+* **No code changed for this item** — it's a data issue in whatever syncs ServiceNow into `gsconnectdev`, to be raised with that pipeline's owner, not fixed here.
+
+### 19. NVIDIA Free-Tier Model Reconfirmed Unreliable; Reverted to Groq (contradicts the "fast and reliable" claim in README/§13 context)
+*Live queries against `gsconnectdev` on the currently-configured `LLM_PROVIDER=nvidia` (`meta/llama-3.1-8b-instruct`) reproduced exactly the failure class §13 already documented: "volume resolved for nov 2025 by Service Line" silently dropped both the date filter and the grouping, returning the unfiltered all-time total (21,397) with only a vague "ignored unrequested constraints" note; "volume resolved for nov 2025" (no grouping at all) was spuriously rejected as needing "a more specific business description."*
+* **Fix.** `LLM_PROVIDER` switched `nvidia` → `groq` in `.env` (Groq's `llama-3.3-70b-versatile` — the model §13 already validated as reliable). Backend restarted (`.env` isn't nodemon-watched). Both failing questions retested live: both now correctly scoped/answered, and 6 repeated runs of the previously-flaky question all succeeded identically — confirms the fix addresses non-determinism, not a one-off lucky run.
+* **Also updated the OpenRouter fallback model** (`OPENROUTER_MODEL`): `openai/gpt-oss-20b:free` → `nvidia/nemotron-3-super-120b-a12b:free`, chosen via OpenRouter's live `/api/v1/models` + `/endpoints` APIs (not stale blog posts — the free-model lineup rotates weekly). The old model's only free endpoint was reporting `status: -2` (degraded) at check time; the new pick has healthy status, 99.5% uptime, and native `structured_outputs` support (this project's planners call `.withStructuredOutput()` on every request). Note: OpenRouter's own free-tier terms mark it "trial use only," and a follow-up live test of the new model surfaced its own reliability issues (silently dropped a requested groupBy once, produced unparseable structured output once) — it remains only the standby, not something to rely on as primary.
+
+### 20. KPI Planner Prompt Gave the Model an Undocumented `errorMode: "AMBIGUOUS"` Escape Hatch
+*Root-caused (not just retried past) the §19-style spurious-ambiguous rejection: "volume resolved for nov 2025" failed, but "what is volume resolved for nov 2025" succeeded — same filters, same KPI, only the interrogative framing differed.*
+* **Root cause.** `errorMode: "AMBIGUOUS"` is a field the LLM sets itself in its own structured output (`z.enum(["AMBIGUOUS", "UNRECOGNIZED"])` in `planner/index.ts`). `kpiPlanner.ts`'s system prompt explains `"UNRECOGNIZED"` (metadata questions) but never once explains `"AMBIGUOUS"` or when to use it — unlike `simplePlanner.ts`, which defines it explicitly with two concrete trigger rules. For KPI queries this field is also structurally redundant: `resolveMatchedKpiPlanDimensions` and `findAmbiguousKpiFilterField` already deterministically catch every real case of a groupBy/filter column existing on more than one of the KPI's tables, *before* the code ever checks `plan.errorMode`. The model never needed this field for KPI mode; the prompt just never told it that.
+* **Fix.** Added rule 11a to `kpiPlanner.ts`'s prompt: never set `errorMode` to `"AMBIGUOUS"` for a KPI query — the backend already owns that decision deterministically; populate `groupBy`/`filters` with exactly what the user asked for (per existing rule 11) and let the backend decide. The only valid `errorMode` for a KPI query is `"UNRECOGNIZED"`, per rule 12.
+* **Verified.** 27 compiler + 71 regression tests green (prompt-string-only change; no guard logic touched). Live: the exact failing phrasing now succeeds reproducibly on Groq.
+
+### 21. Conversation History Moved From In-Memory to the Database; `MAX_CONVERSATIONS` 100 → 10
+*Conversation history (`conversationStore.ts`) lived only in a process-local `Map`, wiped on every backend restart — notably including the several restarts this session needed for provider/config changes. Moved to real tables alongside `db_connections`/`kpi_metrics`.*
+* **New migration** (`008_conversations.sql`): `conversations` (`id`, `connection_id` FK → `db_connections.id` `ON DELETE CASCADE`, `created_at`, `last_activity_at`) and `conversation_messages` (`id`, `conversation_id` FK `ON DELETE CASCADE`, `role`, `content`, `query_result` JSON, `table_hint`, `column_hints` JSON) — same `LONGTEXT`-for-JSON convention as `kpi_metrics`.
+* **`conversationStore.ts` rewritten async/DB-backed.** Oldest-conversation eviction at `MAX_CONVERSATIONS` capacity, the 20-message-per-conversation cap, and the 30-minute TTL are now `DELETE`/interval SQL instead of array slicing — same behavior, persisted. `router.ts` and `query.ts` updated to `await` the now-async calls.
+* **Also fixed while rewriting it:** `query.ts` had its own hand-rolled duplicate of `buildConversationContext()`'s logic (deriving `referencedTables`/`referencedColumns`/`lastTopic` from `conv.messages` directly instead of calling the already-exported function — a gap the frontend wiring notes in AGENTS.md had already flagged). Replaced with a direct call to `buildConversationContext()`; one implementation instead of two.
+* **Found and fixed a real mutation bug along the way.** The old `addMessage` did `msg.queryResult.data.rows = []` **in place** on the same object reference that `query.ts` later sends as the actual API response (`res.json(responsePayload)` runs *after* `addMessage` in the request handler) — so any query made with a `conversationId` attached would have had `data.rows` silently wiped from the real client response, not just from storage. Rewritten to copy (`{ ...queryResult, data: { ...queryResult.data, rows: [] } }`) instead of mutate. Verified live: DB storage shows `rows: []`; the actual HTTP response for the same request still carries the real rows.
+* **`MAX_CONVERSATIONS`**: corrected from 100 (the actual prior value, not 5 as initially assumed) to 10 per request.
+* **Verified.** 98/98 tests green. Live: created a real conversation via `POST /api/conversations`, ran queries through it, confirmed both user/assistant messages landed correctly in `conversation_messages` with proper `table_hint`/`column_hints`, and confirmed (via a temporary OpenRouter switch, to route around a Groq rate-limit window) that the client-facing response still carries real `data.rows` on success.
+
+---
+
+## Part 11: Swagger UI Integration, Mobile Developer Specifications & Dynamic Route Auto-Discovery
+*This phase introduced dynamic OpenAPI 3.0 auto-discovery, interactive Swagger UI endpoint mounting, SSE stream authentication fixes, and offline mobile developer contract specifications.*
+
+### 22. Dynamic Express Router Stack Auto-Discovery Engine (`swagger.ts`)
+* **Zero Hardcoding Route Discovery**: Built `extractExpressRoutes(app._router.stack)` in `backend/src/routes/swagger.ts`. It recursively traverses Express memory and mounted sub-routers (`connections.ts`, `dataCatalog.ts`, `kpiMetrics.ts`, `semanticModels.ts`, `observability.ts`, etc.) at server startup to discover 100% of live endpoints without manual route lists.
+* **Auto-Formatted Parameters**: Automatically extracts Express parameters (`:id`, `:connectionId`) and converts them into valid OpenAPI path parameter schemas (`{id}`, `{connectionId}`).
+* **Server Mounting (`server.ts`)**: Mounted `mountSwagger(app)` in `backend/src/server.ts` to expose interactive Swagger UI at `/docs` and raw OpenAPI spec at `/api-docs.json`.
+* **Network & Mobile Binding (`main.ts`)**: Updated `main.ts` to bind Express to `0.0.0.0`, allowing mobile devices and team members on the same local Wi-Fi network (e.g. `http://172.16.4.68:3005/docs`) to view and test API documentation seamlessly.
+
+### 23. Dual Authentication Scheme (Header & Query Parameter for SSE EventSource Streams)
+* **Authentication Middleware Upgrade (`authMiddleware.ts`)**: Modified `requireAuth` to accept `api_key` as a query parameter (`req.query.api_key`) as well as the standard `x-api-key` HTTP header. Browser `EventSource` connections (which cannot pass custom HTTP headers natively) on `/api/observability/stream?api_key=...` now authenticate cleanly without `401 Unauthorized` errors.
+* **OpenAPI Security Schemes**: Updated OpenAPI security definitions in `swagger.ts` to declare both `ApiKeyAuth` (header) and `ApiKeyQueryParam` (query parameter).
+
+### 24. Explicit OpenAPI Response Component Payload Specifications
+* **Rich Response Examples**: Embedded full, concrete JSON payload models directly into the `/api/analytics/query` OpenAPI specification for:
+  - **Categorical Bar Chart Payload** (`type: "bar"`)
+  - **Time-Series Line Trend Chart Payload** (`type: "line"`)
+  - **Distribution Pie Chart Payload** (`type: "pie"`)
+  - **Multi-Series Stacked Bar Chart Payload** (`type: "bar"`, `stacked: true`)
+  - **Single Scalar Metric Scorecard Payload**
+  - **Data Table / Grid Payload**
+  - **Ambiguous Date Clarification Picker Payload**
+  - **LLM Provider Error Payloads** (Rate Limit 429, Invalid Key 403, Context Length Exceeded)
+  - **Target Customer Database Failure Payloads**
+
+### 25. Optimized Project Dump Script (`generate_project_dump.ps1`)
+* **Test & Asset Filtering**: Updated `generate_project_dump.ps1` to filter out unit test files (`*.test.*`, `*.spec.*`), test directories (`tests`, `__tests__`, `coverage`), and non-code JSON/SVG/env assets.
+* **Functional Export**: Restricted dump outputs strictly to executable TypeScript, JavaScript, SQL, HTML, and CSS source files across backend and frontend modules.
+
+---
+
+## Part 12: Conversation Continuity, Scoped Browser Authentication, Accurate OpenAPI & Documentation Synchronization
+
+### 26. Analytics UI Now Uses the Persistent Conversation Store
+* **Frontend creation/reuse:** `AnalyticsAI.jsx` now calls
+  `createAnalyticsConversation()` before the first question, sends the returned
+  ID on every follow-up, stores the backend ID with local history, and resets it
+  when the active connection or chat changes.
+* **Expiry recovery:** `analytics/query.ts` returns
+  `409 CONVERSATION_UNAVAILABLE` for an expired, missing, or cross-connection
+  conversation. The UI creates one replacement and retries the question once.
+* **Connection ownership:** `getConversation()` accepts an expected connection ID
+  and includes it in the metadata query/update, so context from one connection
+  cannot be applied to another.
+* **Response contract:** successful/structured analytics responses return the
+  active `conversationId`; successful messages are appended only after ownership
+  is verified.
+* **Validation/defaults:** conversation creation validates a positive connection
+  ID, returns 404 for a missing connection, returns HTTP 201 when created, and the
+  source fallback for `MAX_CONVERSATIONS` now matches the documented value of 10.
+* **Regression coverage:** context construction is tested for newest-message
+  ordering, hint de-duplication, last-topic selection, and the six-message context
+  window.
+
+### 27. Query API Keys Restricted and Sensitive URLs Redacted
+* **Small allowlist:** `api_key` in the query string is accepted only by
+  `GET /api/observability/stream`, the native browser `EventSource` path that
+  cannot attach `x-api-key`.
+* **Export no longer leaks a key in the URL:** observability export uses Axios
+  with the normal header, receives a Blob, and triggers a browser download.
+* **Logging safety:** the HTTP logger uses `redactSensitiveUrl()` so API keys,
+  access tokens, and generic token parameters cannot be written into request logs.
+* **Regression coverage:** route/method allowlisting and redaction behavior are
+  exercised by the active backend self-test.
+
+### 28. OpenAPI Contract Corrected
+* KPI create/update schemas now use the executable fields:
+  `connection_id`, `metric_name`, `department`, `metric_type`, `formula`,
+  `format`, `dimensions`, `involved_tables`, `join_spec`, `filter_logic`, and
+  `select_columns`.
+* Analytics documents only `question` as universally required, plus the real
+  mode enum, optional connection/conversation/table context, and structured
+  filters.
+* Route operations carry their own security metadata: public system routes are
+  public, normal APIs use the header, and only SSE advertises the query-key
+  alternative.
+* POST creation routes document HTTP 201. Chart examples use normalized
+  `{ key, value }` rows and the backend's actual bar/line/scorecard chart schema;
+  the unsupported pie example was removed.
+* Hardcoded `172.16.4.68` URLs were removed. Startup discovers a current LAN IPv4
+  address, while OpenAPI accepts an optional `PUBLIC_API_BASE_URL`.
+* A dynamic Express-router regression case verifies discovery, KPI fields, and
+  route-specific security.
+
+### 29. Observability and Environment Wiring
+* `VITE_OBSERVABILITY_POLLING_INTERVAL_MS` now controls the real polling timer
+  with a one-second minimum and a 30-second safe fallback.
+* `frontend/.env.example` now includes `VITE_API_KEY` and explains that a key
+  embedded in browser JavaScript is suitable only for trusted/internal use.
+
+### 30. Documentation Is Maintained Source
+* README, AGENTS, and the complete workflow were synchronized with migration 008,
+  the real route/tool order, persistent conversation wiring, scoped SSE auth,
+  Axios export, polling configuration, Swagger/OpenAPI, and current test counts.
+  (This file and README/AGENTS/the workflow/orchestrator guide/runbooks all
+  remain intentionally gitignored/untracked — that's a deliberate repo policy,
+  not something this pass changed.)
+
+### 31. Persistent History Deletion
+* **Owned single deletion:** `DELETE /api/conversations/:id?connectionId=<id>`
+  deletes only when the conversation belongs to the supplied connection. It is
+  idempotent: an expired/already-deleted/wrong-connection record returns
+  `deleted: false` without exposing or removing another connection's history.
+* **Connection-wide Clear History:**
+  `DELETE /api/conversations?connectionId=<id>` removes every persisted
+  conversation for that connection. The migration's foreign keys cascade the
+  deletion to `conversation_messages`.
+* **Frontend semantics:** each History card now has a permanent delete control.
+  Clear History permanently clears the selected connection, not just the five
+  browser-visible entries. Both actions require confirmation, wait for backend
+  success before changing localStorage, show an inline error on failure, and
+  reset the open chat if it was deleted so it cannot reappear on the next prompt.
+  Deletion controls and the prompt are disabled while a query/deletion is active.
+* **OpenAPI:** both DELETE operations are auto-discovered, require header
+  authentication and a positive `connectionId`, and document the conversation
+  path ID as a UUID rather than an integer.
+* **Verification:** All 102 automated checks pass (27 compiler cases and 75
+  regression cases), as do the backend TypeScript build, frontend production
+  build, and frontend lint. A disposable live conversation confirmed
+  wrong-connection protection, owner deletion, and idempotent repeat deletion;
+  a safe zero-row bulk call confirmed the connection-wide route. Earlier live
+  checks on port 3005 confirmed 400/404
+  conversation creation errors, the pre-query 409 conversation guard, header
+  authentication, normal-route query-key rejection, and SSE-only query-key
+  compatibility.
+
+### 32. Null-First KPI Filters and Parent-Aware Join Branches
+* **Real no-filter state:** a new or reset KPI now stores filter state as `null`
+  and first presents **Create Filters**. The former empty root Match group is no
+  longer rendered or submitted.
+* **Meaningful hierarchy:** the root connector combines independent top-level
+  conditions/groups. Nested groups begin with a condition, label their own
+  connector, can nest again, and disappear when their final condition is removed.
+  Partially completed conditions are blocked with a clear form error.
+* **Explicit SQL NULL intent:** KPI conditions support `IS NULL` and
+  `IS NOT NULL` without a value input or SQL parameter. Other operators still
+  require a value, so the literal string `"null"` is never silently converted
+  into SQL NULL. BETWEEN now captures and validates separate start/end values.
+* **Parent-aware joins:** users can create sibling joins from the root or child
+  joins from any connected right table. Each edge has its own join type and one
+  or more AND-combined ON conditions. Branch deletion preserves unrelated
+  siblings and removes only dependent descendants; changing a right table also
+  removes only the now-invalid descendant branch.
+* **Verification:** frontend lint and production build pass; backend TypeScript
+  build passes; all 103 active checks pass (28 compiler and 75 regression cases).
+
+### 33. KPI Follow-Up Suggestions Recommended a Dimension That Didn't Exist (`pipelines/shared/insightBuilder.ts`)
+*A scorecard KPI answer's "Suggested Follow-ups" always included "Break down volume resolved by a business dimension" — vague on purpose, because the code had no real dimension to name. Clicking it returned the identical ungrouped scorecard, not a breakdown, because "a business dimension" isn't a resolvable column.*
+* **Root cause.** The breakdown suggestion was generated from `matchedDataset.columns` — the raw physical table's full column list (183 columns on `GS_SN_CUSTOMERSERVICE_CASE`, virtually all `allowedForGrouping`) — instead of the KPI's actual configured `dimensions` allowlist (the same list `resolveMatchedKpiPlanDimensions` enforces). Since almost any table has some ungrouped-by column somewhere, this check was nearly always true regardless of whether a real, valid dimension was actually left to offer, and had nothing concrete to name. The monthly-trend suggestion had the identical latent pattern (checked the raw table for any date-like column, not the KPI's configured date dimension) — it just hadn't misfired yet because `resolved_at` happened to be both.
+* **Fix.** `metricDef` (already computed earlier in the same function for the "Based on the X KPI" context text, and already typed with `.dimensions`) is now reused for both suggestions on certified-KPI queries: a monthly-trend suggestion only appears for an unused, KPI-configured date dimension not already the active `timeGrainColumn`; a breakdown suggestion only appears for an unused, KPI-configured non-date dimension, and now **names it** (`"Break down volume resolved by region"` / `"...by service line"`, via a new `humanizeDimensionName()` that strips the `u_gsc_`/`u_` ServiceNow field-namespace prefix). If no configured dimension is left unused, no breakdown suggestion is added at all — no more offering something that can't work. Non-KPI/Simple-mode queries keep the original raw-catalog-column heuristic unchanged, since there's no dimension allowlist concept there.
+* **Verified.** Backend `tsc --noEmit` clean.
+
+---
+
+## Part 13: QueryGPT Upgrade Track A — Reviewed Connection Summaries
+
+### 34. Summary lifecycle, API, and admin tab
+* Added migration `009_connection_semantic_summary.sql`: `db_connections` now
+  stores nullable summary prose, `none|draft|approved` status, and a content
+  timestamp; `kpi_metrics.updated_at` advances on in-place edits so stale
+  summaries can be derived without changing the KPI write path.
+* Added the admin-triggered `connectionSummary.ts` generator. It reuses the
+  configured `getLlmModel()` rate-limited provider path, sends table/KPI-level
+  context without columns, requires two or three sentences, and rejects host,
+  schema, and table/dataset identifier leakage before persistence.
+* Added authenticated `GET /api/summaries`, generate, edit, and approve
+  endpoints. Generate/edit always produce a draft; approval rejects missing or
+  stale content. The new connection-independent `/Layer/Summaries` tab uses the
+  existing async-state, toast, safe-text, formatter, and theme-token patterns.
+* Track A remains isolated from `/api/analytics/query`; no connection routing or
+  Dashboard AI behavior is active yet.
+* **Verified.** 28 compiler cases and 79 regression cases pass (107 total);
+  backend/frontend production builds and frontend lint pass.
+
+---
+
+## Part 14: Dashboard Administration and Runtime Repair
+
+### 35. Summary routing controls and schema-role context
+* Summary generation now stays bounded for large schemas by sending canonical
+  entity-table subjects, KPI categories/counts, and capped name samples. The
+  deterministic table-role classifier distinguishes entity, backup, report,
+  log, and lookup datasets and also guides Simple-planner table selection.
+* The Summaries tab now uses an explicit **In Dashboard AI** toggle, routing
+  dry-run, table-role panel, and full KPI panel. The backend stores enabled state
+  as `summary_status = approved`; the old approve endpoint remains compatible.
+
+### 36. Runtime-only UI and certified-KPI fixes
+* `/Layer/Summaries` now default-exports the page rather than its KPI subpanel;
+  the earlier export mistake built cleanly but rendered only “Loading KPIs…”.
+* Observability parses ISO timestamps with `Date.parse`, so new SSE events remain
+  newest-first and are not discarded when the visible list is already at 50.
+* `insightBuilder.ts` resolves multi-table KPI definitions from `global_kpis`
+  even though validated plans list physical involved datasets. Certified KPI
+  follow-ups now use concrete configured dimensions, time-grain answers use
+  daily/weekly/monthly/quarterly/yearly wording, and an active monthly trend is
+  not suggested again.
+* The certified-KPI dimension resolver now restores explicit daily, weekly,
+  monthly, or yearly trend requests from the KPI's configured date dimension
+  when a provider omits `timeGrain` fields, preventing a trend follow-up from
+  silently degrading into the same scorecard. Certified KPI time series are
+  ordered by their time key, so their table and chart remain chronological.
+* **Verification:** 28 compiler cases and 92 regression cases pass (120 total);
+  backend/frontend builds, frontend lint, live Dashboard routing/sticky history,
+  the Summaries admin page, and full-capacity Observability live merging pass.
+
+---
+
+## Part 15: Safe Entity Listings and KPI Catalog-Preservation Audit
+
+### 37. “What are the cases?” returned every table column
+* **Root cause:** the model correctly selected the live case dataset, but a
+  dataset-only Simple plan passed validation and `compileSimpleSelectQuery()`
+  converted the empty projection into `SELECT *`. That bypassed the AI
+  catalog’s filtered-column boundary and returned all 183 physical columns.
+  The shared result card then mapped every unfamiliar raw key to the same
+  generic “Business Value” label.
+* **Fix:** entity-list intent is recognized after the mandatory LLM dataset
+  decision. The backend deterministically selects up to five real live-catalog
+  display fields (business identifier, description, state/status, priority,
+  and owner/assignee where available) and stores them in `select_columns`.
+  Validation now rejects dataset-only raw plans, while both analytics compiler
+  paths reject empty projections instead of ever emitting `SELECT *`.
+* **Presentation:** the shared Analytics/Dashboard result card humanizes the
+  actual selected keys, so the case result renders meaningful headings such as
+  Number, Short Description, State, Priority, and Assigned To. Insights name
+  the selected entity (“Returned 100 cases”), and the Dashboard-only schema
+  trace includes the approved projection columns. The original company
+  Dashboard shell and layout remain unchanged.
+
+### 38. Certified-KPI wide-catalog preservation
+* **Audited path:** the router’s matched KPI is supplied to
+  `pruneCatalogColumns()`. It protects formula columns, dimensions,
+  `select_columns`, every saved join condition, filter fields, primary keys,
+  and catalog relationship keys. `planKpiQuery()` receives only the KPI’s
+  configured involved datasets; normalization then re-pins the complete saved
+  dataset and join lists, and compilation uses the stored formula/filter
+  definition rather than model-authored SQL.
+* **Regression proof:** a two-table, 418-column fixture with a prune budget of
+  two columns verifies that all formula, display, join, dimension, filter, and
+  key columns remain present on both tables and are passed to the KPI planner.
+  Existing promotion/compiler cases continue to verify complete dataset/join
+  pinning and stored-formula execution.
+* **Verification:** 28 compiler cases and 95 regression cases pass (123 total);
+  backend and frontend production builds pass.
+
+### 39. Explicit KPI month filters could vary between identical runs
+* **Live finding:** two clean Dashboard conversations asked the identical
+  `volume resolved for nov 2025 ?` question. One provider plan omitted the
+  requested month and returned the 21,397 all-time total; the next supplied the
+  range and returned the correct November value of 2,879.
+* **Fix:** named month/year periods (including abbreviated and hyphenated forms
+  such as `nov 2025` and `December -2025`) are now converted before planning
+  into an inclusive `between` filter on the matched KPI’s configured date
+  dimension. The filter is passed separately as authoritative user intent, so
+  the stored KPI definition remains pinned and the LLM cannot drop the period.
+* **Trace:** the Dashboard schema decision now enumerates the validated
+  certified column set derived from the KPI formula, dimensions,
+  `select_columns`, joins, filter AST, and keys. Qualified references are
+  resolved to the correct configured table even when another KPI table has a
+  same-named column.
+
+### 40. Explicit case-list request was hijacked by a partial KPI-name match
+* **Observed failure:** `list the high priority cases that are resolved` matched
+  `center-matched_resolved_cases` from only the generic tokens `resolved` and
+  `cases`. The score (~72.5) exceeded the KPI threshold of 55 even though the
+  question requested records and contained no aggregate intent. The existing
+  measure-conflict guard correctly found no competing numeric measure, but it
+  had no concept of list-versus-scorecard output shape. KPI normalization then
+  correctly pinned the wrong KPI, making a one-row aggregate unavoidable.
+* **Fix:** entity-list detection now lives in a dependency-safe shared module
+  used by both classifier and Simple planner. Strong record wording
+  (`list`, `display`, `which`, `what are`, `give me`) wins over a KPI match;
+  weak `show` wording also stays Simple unless it contains the full matched KPI
+  phrase. Aggregate wording remains KPI-eligible. The orchestrator independently
+  blocks Simple-to-KPI promotion for entity-list intent.
+* **Planner defense:** after the mandatory LLM call, a selected entity-list
+  dataset is forced back to a metric-free explicit record projection even if
+  the provider returns a KPI metric. Explicit conventional filters are grounded
+  to the selected live dataset; the reported request becomes
+  `priority = High AND state = Resolved`.
+* **Verification:** the exact sentence is covered with a deliberately hostile
+  KPI-shaped planner response, while full KPI-name `show` wording and
+  `how many` aggregate wording are verified to stay KPI. All 124 active checks
+  pass (28 compiler and 96 regression cases).
+
+---
+
+## Part 16: Authenticated Per-Connection Semantic Models and Qdrant Cutover
+
+### 41. Safe metadata database and identity ownership
+* Added a guarded, rerunnable `autonomous_db` copy/verification workflow and
+  reconciled the two legacy KPI columns before cutover. The legacy source database
+  was retained.
+* Added versioned scrypt password hashes, hashed HttpOnly sessions, expiry and
+  revocation, admin/user roles, trusted-origin enforcement, immutable semantic
+  keys, audit stamps, and conversation ownership. No default administrator
+  password is stored or generated.
+
+### 42. Per-connection semantic documents
+* Replaced the combined document runtime with one revisioned MySQL semantic model
+  per connection. Public datasource identity uses the stable semantic key, never a
+  bare numeric connection ID, and excludes host/user/secret fields.
+* Added selected-table full generation, missing-only append, selected-entity
+  regeneration, deterministic no-LLM removal, revision-safe descriptive editing,
+  generation leases/recovery, live-schema validation, deterministic physical
+  identities/types/keys/relationships, and safe audit display.
+
+### 43. Local Qdrant and Ollama
+* Fixed Qdrant as the derived vector database and pinned local Qdrant/Ollama images
+  with persistent volumes and a one-shot `nomic-embed-text:v1.5` pull.
+* Added finite 768-dimensional embedding validation, mismatch-safe collection
+  initialization, bounded summaries, durable leased outbox retries, superseded
+  revision protection, and delete-after-connection behavior. MySQL remains usable
+  during vector outages and an administrator can retry vector sync without model
+  regeneration.
+
+### 44. UI, legacy removal, and verification
+* Rebuilt the Semantic Model tab with connection and table/view selection,
+  full/append/regenerate/remove/save controls, separate generation/vector state,
+  audit/revision display, and read-only normal-user behavior. The established teal
+  `#0ca1b6`, warm `#f5f4f1` background, white surfaces, typography, spacing,
+  shadows, radii, and responsive sidebar were preserved and browser-checked on
+  desktop and 390x844 mobile.
+* Exported a credential-sanitized local legacy backup and conversion report, then
+  applied migration 018. Both old tables are gone and no active runtime route or
+  frontend service references the combined flow.
+* Verification passes: 28 compiler cases, 96 regression cases, the full auth/key/
+  vector/store/generator/API/cutover integration bundle, frontend lint, backend and
+  frontend production builds, and desktop/mobile browser QA.
+
+---
+
+## Part 17: Summary Removal and Clear Feature Ownership
+
+### 45. Retired Summary subsystem
+* Removed the Summary semantic-layer page, frontend service calls, backend route,
+  generation module, OpenAPI surface, types, and feature-specific tests.
+* Added and applied `019_remove_connection_summaries.sql` after confirming the two
+  connection rows had no non-empty Summary content. The obsolete
+  `semantic_summary`, `summary_status`, and `summary_updated_at` columns no longer
+  exist.
+
+### 46. Semantic-model Dashboard routing
+* Dashboard connection selection now reads only ready semantic-model documents,
+  validates them with the authoritative document schema, and ranks bounded
+  business context. Physical table and column identifiers are not exposed to the
+  routing model.
+* Analytics AI and Observability remain active semantic-layer routes and visible
+  tabs. The existing application theme and responsive shell were not restyled.
+
+### 47. Understandable filenames and verification
+* Separated deterministic analytics metadata (`semanticCatalog.ts`) from the
+  per-connection model API (`semanticModels.ts`) and renamed the Dashboard router
+  to `semanticModelConnectionRouter.ts`.
+* Renamed active page modules to `SemanticModelManager.jsx`,
+  `KpiDefinitions.jsx`, `AnalyticsAssistant.jsx`, and
+  `ObservabilityDashboard.jsx`, then updated every import and lazy route.
+* Replacement semantic-routing regression coverage keeps the active result at 28
+  compiler cases and 96 regression cases. Backend/frontend builds, frontend lint,
+  the full implementation bundle, schema cutover verification, OpenAPI route
+  checks, and desktop/mobile browser theme checks all pass.
+
+---
+
+## Part 18: Fresh Schema Baseline, Login Gate, and Startup Clarity
+
+### 48. One migration for new servers
+* Consolidated the verified final metadata schema into `migrations/001_init.sql`.
+  New installations now create authentication, connections, KPIs, conversations,
+  telemetry, semantic models, vector outbox, and migration ledger directly.
+* Removed obsolete migrations 002-019 plus one-time database-copy, backfill, and
+  legacy semantic-conversion scripts. Future schema changes begin at 002.
+* Added a disposable blank-database baseline self-test and a strict configured-
+  database verifier. Both require exactly 14 runtime tables and one migration
+  ledger entry.
+
+### 49. Runtime schema cleanup
+* Active-source audit proved every remaining runtime table is used. The completed
+  `autonomous_copy_audit` table was the only setup-only table.
+* After confirming zero KPI rows carried legacy raw values, permanently removed
+  the setup audit table and unused `kpi_metrics.inclusions`/`exclusions` columns.
+  The current migration ledger now contains only `001_init.sql`.
+
+### 50. Authentication and port startup
+* Added `LoginGate.jsx`, which renders the established themed sign-in page until
+  session discovery/login succeeds. No Dashboard or semantic-layer screen renders
+  for an unauthenticated browser.
+* Backend port conflicts now print a concise explanation and exit cleanly instead
+  of emitting an unhandled Node event stack. `EADDRINUSE` is explicitly independent
+  of frontend login state.

@@ -1,0 +1,36 @@
+.charts-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  width: 100%;
+}
+
+/* Card */
+.chart-card {
+  flex: 1 1 100%;
+  min-width: 0; /* 🔥 VERY IMPORTANT */
+  background: var(--theme-card-bg, #fff);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+/* Chart container */
+.chart-wrapper {
+  position: relative;
+  width: 100%;
+  height: 320px;
+}
+
+/* Tablet */
+@media (min-width: 768px) {
+  .chart-card {
+    flex: 1 1 calc(50% - 12px);
+  }
+}
+
+/* Desktop */
+@media (min-width: 1280px) {
+  .chart-wrapper {
+    height: 380px;
+  }
+}

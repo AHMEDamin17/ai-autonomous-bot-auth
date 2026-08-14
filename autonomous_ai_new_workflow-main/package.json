@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm.cmd run build --prefix backend && npm.cmd run build --prefix frontend",
+    "lint": "npm.cmd run lint --prefix frontend",
+    "test": "npm.cmd run test --prefix backend",
+    "test:implementation": "npm.cmd run test:implementation --prefix backend"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

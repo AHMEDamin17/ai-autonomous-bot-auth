@@ -1,0 +1,88 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.vite/
+out/
+coverage/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS generated / Temp files
+.DS_Store
+Thumbs.db
+*.bak
+*.tmp
+*.swp
+.cache/
+tmp/
+temp/
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Telemetry Cache
+.telemetry_cache.json
+
+# Local database files and service data
+*.db
+*.sqlite
+*.sqlite3
+backend/data/
+data/
+qdrant_storage/
+ollama_storage/
+
+# Local credentials, certificates, and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+credentials*.json
+service-account*.json
+
+# Local migration backups (may contain environment-specific connection labels)
+backend/backups/
+
+# Generated project/source dumps
+/backend_complete.txt
+/frontend_complete.txt
+/project_dump*.txt
+/*_complete_dump.txt
+
+# Environment-specific semantic-model exports
+/mysql_*.json
+/Final.JSON
+/*_semantic_model.json
+
+# Local agent/tool state
+.codex/
+.agents/
+
+# Testing / Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/

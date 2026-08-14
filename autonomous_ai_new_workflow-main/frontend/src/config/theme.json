@@ -1,0 +1,57 @@
+{
+  "name": "Project Dashboard",
+  "colors": {
+    "primary": "#0ca1b6",
+    "primaryHover": "#0a8ea1",
+    "primaryActive": "#087989",
+    "primaryDisabled": "#7ecfdc",
+    "background": "#f5f4f1",
+    "surface": "#ffffff",
+    "text": "#111827",
+    "textSecondary": "#64748b",
+    "textMuted": "#6b7280",
+    "border": "#e5e7eb",
+    "borderDark": "#d5d5d5",
+    "borderBlack": "#000000",
+    "accent": "#21808d",
+    "accentDisabled": "#cbd5e1",
+    "containerBg": "#f9fafb",
+    "cardBg": "#ffffff",
+    "cardBorderColor": "#e5e7eb",
+    "sidebarBtnColor": "#64748b",
+    "sidebarBtnHoverBg": "#f1f5f9",
+    "scrollbarTrack": "#f5f4f1",
+    "scrollbarThumb": "#c5c3bf",
+    "scrollbarThumbHover": "#9e9c98",
+    "chipBg": "#e3fafc",
+    "chipBorder": "#a6d3f7",
+    "chipText": "#172455",
+    "chipHoverBg": "#a7eff9",
+    "gradientStart": "#60a5fa",
+    "gradientEnd": "#a78bfa",
+    "bgGradientStart": "#e8dcf9",
+    "bgGradientEnd": "#d7eff8"
+  },
+  "fonts": {
+    "main": "system-ui, Avenir, Helvetica, Arial, sans-serif"
+  },
+  "borders": {
+    "radiusButton": "6px",
+    "radiusCard": "16px",
+    "radiusChip": "9999px",
+    "radiusIconCircle": "50%"
+  },
+  "components": {
+    "cardShadow": "0 3px 6px rgb(224, 237, 244)",
+    "cardHoverShadow": "0 6px 14px #b5dade",
+    "buttonShadow": "0 1px 3px rgba(12, 161, 182, 0.35)",
+    "chipShadow": "0 2px 6px rgba(212, 5, 17, 0.15)",
+    "chatContainerBg": "#ffffff",
+    "chatContainerBorder": "#e5e7eb",
+    "inputBg": "#ffffff",
+    "inputBorder": "#e5e7eb"
+  },
+  "assets": {
+    "logo": "/src/assets/logo.png"
+  }
+}

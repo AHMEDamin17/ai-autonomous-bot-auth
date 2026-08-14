@@ -1,0 +1,46 @@
+{
+  "name": "app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "e2e": "playwright test",
+    "preview": "vite preview",
+    "test:msal-popup": "node scripts/msalPopupSelftest.mjs"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^5.17.3",
+    "@azure/msal-react": "^5.5.4",
+    "@reduxjs/toolkit": "^2.11.2",
+    "@tailwindcss/vite": "^4.1.18",
+    "axios": "^1.13.5",
+    "chart.js": "^4.5.1",
+    "chartjs-plugin-datalabels": "^2.2.0",
+    "lucide-react": "^0.577.0",
+    "react": "^19.2.0",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.0",
+    "react-redux": "^9.2.0",
+    "react-router-dom": "^7.13.0",
+    "recharts": "^3.8.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "json-server": "^0.17.4",
+    "tailwindcss": "^4.3.2",
+    "vite": "^7.2.4"
+  }
+}

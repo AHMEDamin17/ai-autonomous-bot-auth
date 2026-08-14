@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Completing Microsoft sign-in</title>
+  </head>
+  <body>
+    <p>Completing Microsoft sign-in…</p>
+    <!--
+      MSAL Browser v5 redirect bridge.
+      Azure redirects the auth popup here with #code=...; this page broadcasts
+      the response to the opener and closes. Do NOT mount the React SPA here.
+    -->
+    <script type="module">
+      import { broadcastResponseToMainFrame } from "@azure/msal-browser/redirect-bridge";
+
+      broadcastResponseToMainFrame().catch((error) => {
+        console.error("MSAL redirect bridge failed:", error);
+        document.body.innerHTML =
+          "<p>Sign-in could not complete in this window. You can close it and try again from the main app.</p>";
+      });
+    </script>
+  </body>
+</html>
